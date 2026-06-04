@@ -1,0 +1,3 @@
+[submodule "extern/MCMC"]
+	path = extern/MCMC
+	url = https://github.com/MarianoChaves/MCMC
