@@ -115,7 +115,18 @@ int main() {
     std::cout << "Welcome to Latent-SHAM" << std::endl;
     srand(5981);
 
+    auto t0 = std::chrono::high_resolution_clock::now();
+
     std::vector<halo> halos = read_halo_catalog(HALO_CATALOG);
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    // Remove halos below a mass threshold for now
+    double logmhalo_cut = 10.8;
+    halos.erase(std::remove_if(halos.begin(), halos.end(),
+        [logmhalo_cut](const halo& h) { return h.logmhalo < logmhalo_cut; }), halos.end());
+
+    auto t2 = std::chrono::high_resolution_clock::now();
 
     // Sort by a function of the halo properties
     std::sort(halos.begin(), halos.end(),
@@ -123,19 +134,45 @@ int main() {
             return a.logmhalo > b.logmhalo; 
         });
 
+    auto t3 = std::chrono::high_resolution_clock::now();
 
 
     // Now abundance match to galaxy r band abs magnitude using
     double density = 0.0;
     for (halo& h : halos) {
         density += 1.0 / SIM_VOLUME; // cumulative density of halos above this mass
-        h.abs_mag_r = GalaxyMagMatcher::get().match(density);
+        // Let's catch the  "terminate called after throwing an instance of 'boost::wrapexcept<std::domain_error>" and print density there
+        try {
+            h.abs_mag_r = GalaxyMagMatcher::get().match(density);
+        } catch (const std::exception& e) {
+            std::cerr << "Error matching density " << density << " to magnitude for halo with logmhalo " << h.logmhalo << ": " << e.what() << std::endl;
+            throw; // rethrow after logging
+        }
+        //h.abs_mag_r = GalaxyMagMatcher::get().match(density);
     }
+
+    auto t4 = std::chrono::high_resolution_clock::now();
     
     // Print the first few halo masses and galaxy assigned
     for (int i = 0; i < 5 && i < halos.size(); ++i) {
         std::cout << "Halo " << i << ": logmhalo = " << halos[i].logmhalo << ", abs_mag_r = " << halos[i].abs_mag_r << std::endl;
     }
+
+    // And the last few
+    for (int i = halos.size() - 5; i < halos.size(); ++i) {
+        std::cout << "Halo " << i << ": logmhalo = " << halos[i].logmhalo << ", abs_mag_r = " << halos[i].abs_mag_r << std::endl;
+    }
+
+    // Print perf summary
+    auto duration_read = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    auto duration_filter = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+    auto duration_sort = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
+    auto duration_am = std::chrono::duration_cast<std::chrono::milliseconds>(t4 - t3).count();
+    std::cout << "Performance summary:\n";
+    std::cout << "  Read halo catalog: " << duration_read << " ms\n";
+    std::cout << "  Filter halos: " << duration_filter << " ms\n";
+    std::cout << "  Sort halos: " << duration_sort << " ms\n";
+    std::cout << "  Abundance match: " << duration_am << " ms\n";
 
     return 0;
 }

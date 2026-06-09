@@ -37,8 +37,9 @@ void test_TabulatedDensityFunction() {
     TEST_CASE(value > value2, value2 - value, "Density should decrease as x increases");
 }
 
-void test_AMCDF() {
-    printf("\n=== AMCDF TESTS ===\n");
+
+void test_AMCDF_HaloICA1() {
+    printf("\n=== AMCDF TESTS (HALO ICA 1) ===\n");
 
     AMCDF t(testdensityfile);
 
@@ -73,7 +74,7 @@ void test_AMCDF() {
 
     
     // Test extrapolation behavior at boundaries
-    printf("\n--- Testing Boundary Behavior ---\n");
+    printf("\n--- Testing Boundary Behavior  ---\n");
     double extreme_low = -1000.0;
     double val_low = t.eval(extreme_low);
     double extreme_high = 1000.0;
@@ -81,15 +82,125 @@ void test_AMCDF() {
     
     printf("  x=%.1f -> %.6f,   x=%.1f -> %.3e\n", extreme_low, val_low, extreme_high, val_high);
     
-    TEST_CASE(std::isfinite(val_low), val_low, "Should handle extrapolation to low values");
-    TEST_CASE(std::isfinite(val_high), val_high, "Should handle extrapolation to high values");
-    TEST_CASE(exp(val_low) >= 0.0 && exp(val_high) >= 0.0, exp(val_low) >= 0.0 && exp(val_high) >= 0.0, "Extrapolated densities should remain non-negative");
+    TEST_CASE(std::isfinite(val_low) && val_low > 1e-2, val_low, "CDF should handle extrapolation for low values");
+    TEST_CASE(std::isfinite(val_high) && val_high < 1e-8, val_high, "CDF should handle extrapolation for high values");
+    TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
 
+}
+
+void test_AMCDF_GalaxyAbsMag() {
+
+    // Now repeat for magnitudes file
+    AMCDF t(GAL_MAGR_DENSITY);
+    std::vector<double> x_vals(20);
+
+    printf("\n--- Testing Spline Smoothness and Monotonicity (Galaxy abs mag) ---\n");
+    for (int i = 0; i < 20; i++)
+        x_vals[i] = -23.0 + i * 0.1; // Sample from -23 to -21
+    double prev_val = -9999;
+    bool is_smooth = true;
+    for (double x : x_vals) {
+        double val = t.eval(x);            
+        TEST_CASE(std::isfinite(val), val, "All interpolated values should be finite");
+
+        if (prev_val > -9999) {
+            // Monotonic Test
+            TEST_CASE(val >= prev_val, x, "Cumulative density should get larger as we increase x"); // Summed from small values up for magnitudes since negative is brighter
+
+            // Check that moving by 0.1 in this space doesn't cause huge jumps in density (which would indicate a bad spline fit)
+            double ratio = val / prev_val;
+            if (ratio > 1e1 || ratio < 1e-1) {
+                is_smooth = false;
+                printf("    WARNING: Large jump detected (ratio=%.2e)\n", ratio);
+            }
+        }
+        prev_val = val;
+    }
+    TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
+
+     // Test extrapolation behavior at boundaries
+    printf("\n--- Testing Boundary Behavior (Galaxy abs mag) ---\n");
+    double extreme_low = -30.0;
+    double val_low = t.eval(extreme_low);
+    double extreme_high = -5.0;
+    double val_high = t.eval(extreme_high);
+
+    TEST_CASE(std::isfinite(val_low) && val_low < 1e-8, val_low, "CDF should handle extrapolation for low values");
+    TEST_CASE(std::isfinite(val_high) && val_high > 1e-2, val_high, "CDF should handle extrapolation for high values");
+    TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
+}
+
+const std::string galgmrdensityfile = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_g-r_density_func.dat";
+
+void test_AMCDF_GalaxyGmR() {
+    std::cout << "\n=== AMCDF TESTS (GALAXY COLOR g-r) ===\n";
+
+    AMCDF t(galgmrdensityfile);
+    std::vector<double> x_vals(20);
+
+    printf("\n--- Testing Spline Smoothness and Monotonicity (Galaxy g-r) ---\n");
+    for (int i = 0; i < 20; i++)
+        x_vals[i] = 0.2 + i * 0.04;
+    double prev_val = -9999;
+    bool is_smooth = true;
+    for (double x : x_vals) {
+        double val = t.eval(x);            
+        TEST_CASE(std::isfinite(val), val, "All interpolated values should be finite");
+
+        if (prev_val > -9999) {
+            // Monotonic Test
+            TEST_CASE(val <= prev_val, x, "Cumulative density should get smaller as we increase x"); // Summed from high g-r (redder) down
+
+            // Check that moving by 0.1 in this space doesn't cause huge jumps in density (which would indicate a bad spline fit)
+            double ratio = val / prev_val;
+            if (ratio > 1e1 || ratio < 1e-1) {
+                is_smooth = false;
+                printf("    WARNING: Large jump detected (ratio=%.2e)\n", ratio);
+            }
+        }
+        prev_val = val;
+    }
+    TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
+
+     // Test extrapolation behavior at boundaries
+    printf("\n--- Testing Boundary Behavior (Galaxy abs mag) ---\n");
+    double extreme_low = -5.0;
+    double val_low = t.eval(extreme_low);
+    double extreme_high = 5.0;
+    double val_high = t.eval(extreme_high);
+
+    TEST_CASE(std::isfinite(val_low) > 1e-2, val_low, "CDF should handle extrapolation for low values");
+    TEST_CASE(std::isfinite(val_high) && val_high < 1e-8, val_high, "CDF should handle extrapolation for high values");
+    TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
+
+}
+
+void test_GalaxyMagMatcher() {
+    printf("\n=== GalaxyMagMatcher TESTS ===\n");
+
+    auto matcher = GalaxyMagMatcher::get();
+
+    // The sim box will start at 1.56e-8 so we need at least this low density...
+    // Test matching at a few densities
+    std::vector<double> test_densities = {1e-9, 1e-8, 1e-6, 1e-4, 0.01, 0.03, 0.05}; // These should be within the range of the density function
+    for (double dens : test_densities) {
+        double mag = matcher.match(dens);
+        TEST_CASE(std::isfinite(mag) && mag < -5 && mag > -30 , mag, "Matched magnitude should be finite and reasonable");
+        printf("  Density=%.2e -> Mag=%.3f\n", dens, mag);
+    }
+
+    // Test that higher density gives fainter magnitude (higher number in mags)
+    double mag1 = matcher.match(1e-4);
+    double mag2 = matcher.match(1e-3);
+    TEST_CASE(mag2 > mag1, mag2 - mag1, "Higher density should give fainter magnitude");
 }
 
 int main () {
     test_TabulatedDensityFunction();
-    test_AMCDF();
+    test_AMCDF_HaloICA1();
+    test_AMCDF_GalaxyAbsMag();
+    test_AMCDF_GalaxyGmR();
+    test_GalaxyMagMatcher();
 
     std::cout << "All tests passed successfully.\n";
     return 0;

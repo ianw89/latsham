@@ -8,95 +8,26 @@
 #include <string>
 #include <fstream>
 #include <iostream>
+#include <boost/math/tools/roots.hpp>
+#include <limits>
 
-const std::string GAL_MAGR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_absmag01_sdss_r_density_func.dat";
+using boost::math::tools::eps_tolerance;
+using boost::math::tools::toms748_solve;
+
+const std::string GAL_MAGR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_abs_mag_r_k_best_density_func.dat";
 const std::string GAL_COLOR_GMR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_color_g-r_density_func.dat";
 
 
 #include <math.h>
 #include <stdlib.h>
 
-#define NRANSI
-#define ITMAX 100
-#define EPS 3.0e-8
-#define SIGN(a,b) ((b) >= 0.0 ? fabs(a) : -fabs(a))
-// This is a modified version of the zbrent root-finding algorithm from Numerical Recipes, 
-// which allows passing an extra parameter (galaxy_density) to the function whose root we're trying to find.
-// When abundance matching we use this.
-// There, x1 means min halo mass and is 10^7, x2 means max halo mass and is 10^16, tol is 10^-5
-template <typename Func>
-double zbrent(Func func, double x1, double x2, double tol, double galaxy_density) {
-    int iter;
-    double a=x1,b=x2,c=x2,d,e,min1,min2;
-    double fa=func(a, galaxy_density),fb=func(b, galaxy_density),fc,p,q,r,s,tol1,xm;
 
-    if ((fa > 0.0 && fb > 0.0) || (fa < 0.0 && fb < 0.0))
-        throw std::runtime_error("Root must be bracketed in zbrent");
-    fc=fb;
-    for (iter=1;iter<=ITMAX;iter++) {
-        if ((fb > 0.0 && fc > 0.0) || (fb < 0.0 && fc < 0.0)) {
-            c=a;
-            fc=fa;
-            e=d=b-a;
-        }
-        if (fabs(fc) < fabs(fb)) {
-            a=b;
-            b=c;
-            c=a;
-            fa=fb;
-            fb=fc;
-            fc=fa;
-        }
-        tol1=2.0*EPS*fabs(b)+0.5*tol;
-        xm=0.5*(c-b);
-        if (fabs(xm) <= tol1 || fb == 0.0) return b;
-        if (fabs(e) >= tol1 && fabs(fa) > fabs(fb)) {
-            s=fb/fa;
-            if (a == c) {
-                p=2.0*xm*s;
-                q=1.0-s;
-            } else {
-                q=fa/fc;
-                r=fb/fc;
-                p=s*(2.0*xm*q*(q-r)-(b-a)*(r-1.0));
-                q=(q-1.0)*(r-1.0)*(s-1.0);
-            }
-            if (p > 0.0) q = -q;
-            p=fabs(p);
-            min1=3.0*xm*q-fabs(tol1*q);
-            min2=fabs(e*q);
-            if (2.0*p < (min1 < min2 ? min1 : min2)) {
-                e=d;
-                d=p/q;
-            } else {
-                d=xm;
-                e=d;
-            }
-        } else {
-            d=xm;
-            e=d;
-        }
-        a=b;
-        fa=fb;
-        if (fabs(d) > tol1)
-            b += d;
-        else
-            b += SIGN(tol1,xm);
-        fb=func(b, galaxy_density);
-    }
-    throw std::runtime_error("Maximum number of iterations exceeded in zbrent");
-    return 0.0;
-}
-#undef ITMAX
-#undef EPS
-#undef NRANSI
-#undef SIGN
-
+//double zbrent(Func func, double x1, double x2, double tol, double galaxy_density) {
+  
 // TODO Let's replace these with a more modern GSL functions soon
 double qromo(double (*func)(double), double a, double b, double (*choose)(double(*)(double), double, double, int));
 double midpnt(double (*func)(double), double a, double b, int n);
 
-#define N_HPCA_COMP 4
 #define SILENT 0
 #define VERBOSE 0
 
@@ -109,9 +40,12 @@ double midpnt(double (*func)(double), double a, double b, int n);
 
 double gsl_spline_eval_extrap(const gsl_spline *spline, const double *x, const double *y, int n, double xq, gsl_interp_accel *acc) {
     // Constant extrapolation below range - this only happens due to floating point inaccuracy issues
+    //std::cout << "Extrapolating spline at xq=" << xq << " with range [" << x[0] << ", " << x[n-1] << "]\n";
     if (xq < x[0]) {
+        std::cout << "xq is below the range. Extrapolating at left edge.\n";
         return gsl_spline_eval(spline, x[0], acc);
     } else if (xq > x[n-1]) {
+        std::cout << "xq is above the range. Extrapolating at right edge.\n";
         return gsl_spline_eval(spline, x[n-1], acc);
     } else {
         return gsl_spline_eval(spline, xq, acc);
@@ -128,6 +62,7 @@ double gsl_spline_eval_extrap(const gsl_spline *spline, const double *x, const d
 #define BIG_G 4.304E-9 /* BIG G in units of (km/s)^2*Mpc/M_sol */
 #define RT2PI 2.50662827
 
+/*
 double func_dr1(double z) {
     return pow(OMEGA_M * (1 + z) * (1 + z) * (1 + z) + OMEGA_L, -0.5);
 }
@@ -139,6 +74,7 @@ double distance_redshift(double z) {
     x = c_on_H0 * qromo(func_dr1, 0.0, z, midpnt);
     return x;
 }
+*/
 
 int filesize(const std::string &filename) {
     int size = 0;
@@ -173,12 +109,12 @@ public:
         for (int i = 0; i < n; i++)
             fp >> px[i] >> rho[i];
         fp.close();
-        LOG_INFO("Loaded density function with %d points from %s\n", n, filename.c_str());    }
+        LOG_VERBOSE("Loaded density function with %d points from %s\n", n, filename.c_str());    }
 
-    double getMin() {
+    double getLeftEdge() {
         return px[0];
     }
-    double getMax() {
+    double getRightEdge() {
         return px[n - 1];
     }
 
@@ -199,7 +135,9 @@ private:
 };
 
 
-
+/**
+ * A cumulative density function for abundance matching built from a TabulatedDensityFunction. 
+ */
 class AMCDF {
 
 public:
@@ -211,8 +149,8 @@ public:
         const std::vector<double> &px = pdf.getX();  // x values for the density function
         const std::vector<double> &rho = pdf.getDensity();  // density at each bin 
 
-        // We calculate the CDF based on the PDF by directing integrating from right to left using the trapezoid rule, 
-        // so the bin width is (x[i+1] - x[i]) and the density is rho[i] at the bin center.
+        // We calculate the CDF based on the PDF by directly integrating from right to left (end of file backwards) 
+        // using the trapezoid rule, so the bin width is (x[i+1] - x[i]) and the density is rho[i] at the bin center.
 
         if (cnt < 100) {
             LOG_WARN("Density function %s has only %d points, which may be too few for accurate CDF integration.\n", filename.c_str(), cnt);
@@ -220,16 +158,16 @@ public:
         // TODO more sanity checks here
 
         cx.resize(cnt);
-        cumulativeDensity.resize(cnt);
+        logCumulativeDensity.resize(cnt);
 
         double sum = 0.0;
         cx[cnt - 1] = px[cnt - 1];
-        cumulativeDensity[cnt - 1] = -80.0; // assume n(> last point) = 0
+        logCumulativeDensity[cnt - 1] = -80.0; // assume n(> last point) = 0
         for (int i = cnt - 2; i >= 0; i--) {
-            double dx = px[i + 1] - px[i];  // uneven bins ok
+            double dx = abs(px[i + 1] - px[i]);  // uneven bins ok, descending or ascending order ok
             sum += 0.5 * (rho[i] + rho[i + 1]) * dx; // trapezoid area
             cx[i] = px[i];
-            cumulativeDensity[i] = (sum > 0.0) ? log(sum) : -80.0; // a min value in log space
+            logCumulativeDensity[i] = (sum > 0.0) ? log(sum) : -80.0; // a min value in log space
         }
 
         // Fit spline to the cumulative density function
@@ -239,30 +177,40 @@ public:
             LOG_ERROR("Failed to allocate GSL spline for PCA cumulative\n");
             exit(1);
         }
-        int status = gsl_spline_init(spline, cx.data(), cumulativeDensity.data(), cnt);
+        // Reverse order if needed because GSL splines must be monotonically increasing in x
+        if (cx[0] > cx[cnt - 1]) {
+            std::reverse(cx.begin(), cx.end());
+            std::reverse(logCumulativeDensity.begin(), logCumulativeDensity.end());
+        }
+        int status = gsl_spline_init(spline, cx.data(), logCumulativeDensity.data(), cnt);
         if (status) {
             LOG_ERROR("GSL spline init failed for PCA cumulative: %s\n", gsl_strerror(status));
             exit(1);
         }
 
-        LOG_INFO("Built cumulative density spline for %s with %d points.\n", filename.c_str(), cnt);
+        LOG_VERBOSE("Built cumulative density spline for %s with %d points.\n", filename.c_str(), cnt);
     }
 
-    double getMin() const {
+    double getLeftEdge() const {
         return cx[0];
     }
-    double getMax() const {
+    double getRightEdge() const {
         return cx[cx.size() - 1];
     }
 
+    /**
+     * Evaluate the cumulative density function n(>value) at the given value using spline interpolation.
+     * 
+     * Returns the cumulative density n(>value) in units of number/(Mpc/h)^3. 
+     */
     double eval(double value) {
         // Spline works on log CDF, so exponentiate the result to get n(>value)
-        return exp(gsl_spline_eval_extrap(spline, cx.data(), cumulativeDensity.data(), cx.size(), value, acc));
+        return exp(gsl_spline_eval_extrap(spline, cx.data(), logCumulativeDensity.data(), cx.size(), value, acc));
     }
 
 private:
     std::vector<double> cx; // x values for the cumulative density function (same as PDF x values)
-    std::vector<double> cumulativeDensity; // log cumulative number density for each
+    std::vector<double> logCumulativeDensity; // log cumulative number density for each
     gsl_interp_accel* acc;
     gsl_spline* spline;
 
@@ -273,9 +221,12 @@ class AbundanceMatchingManager {
     public:
 
     /**
-     * Match a provided density to a AMCDF to acquire a property.
+     * Match a provided density (which should be a running cumulative density) 
+     * to a AMCDF to acquire a property value from the AMCDF.
      * 
      * Units must be consistent and are usually [1 / (Mpc/h)^3].
+     * 
+     * Returns the property value at the matched cumulative density.
      */
     virtual double match(double density) = 0;
 
@@ -346,8 +297,8 @@ class AbundanceMatchingManager {
 
         return match(zcnt[iz]);
          */
-
-        return 0.0; // placeholder for now
+        throw std::runtime_error("match_in_zbins is not implemented yet. Volume-limited mode only for now.");
+        //return 0.0; // placeholder for now
     }
 
     /**
@@ -374,17 +325,33 @@ public:
     }
 
     double match(double density) {
-        double min = mag_cdf->getMin();
-        double max = mag_cdf->getMax();
+        double min = std::min(mag_cdf->getLeftEdge(), mag_cdf->getRightEdge());
+        double max = std::max(mag_cdf->getLeftEdge(), mag_cdf->getRightEdge());
 
-        auto func = [this](double value, double dens) {
-            double a = mag_cdf->eval(log(value));
-            return exp(a) - dens;        
+        auto func = [this, density](double value) {
+            double matched_dens = mag_cdf->eval(value);
+            //std::cout << "Evaluated density at value " << value << " is " << matched_dens << " for target density " << density << std::endl;
+            return matched_dens - density;        
         };
 
-        return exp(zbrent(func, min, max, 1.0E-5, density));
-    }
+        int bits = 18;  // TODO what should it be?  1 / 2^bits tolerance I think is meaning
+        eps_tolerance<double> tol(bits);
+        boost::uintmax_t max_iter = 100;
 
+        // TODO switch to this after to see if the auto bracker is really better.
+        // std::pair<double, double> result = bracket_and_solve_root(func, guess, factor, rising, tol);
+        //std::cout << "Matching galaxy density " << density << " to magnitude with bounds [" << min << ", " << max << "]..." << std::endl;
+
+        std::pair<double, double> result = toms748_solve(func, min, max, tol, max_iter);
+        //std::cout << "Matched galaxy density " << density << " to magnitude " << result.first << " with function value " << func(result.first) << std::endl;
+        return result.first; // root is between result.first and result.second, but they should be very close given the tolerance
+
+        //return exp(zbrent(func, min, max, 1.0E-5, density));
+    }
+    
+    //~GalaxyMagMatcher() {
+    //    delete mag_cdf;
+    //}
 private:
     AMCDF *mag_cdf;
 
@@ -393,9 +360,7 @@ private:
         mag_cdf = new AMCDF(GAL_MAGR_DENSITY);
     }
 
-    ~GalaxyMagMatcher() {
-        delete mag_cdf;
-    }
+
 };
 
 
