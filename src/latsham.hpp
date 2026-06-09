@@ -1,5 +1,6 @@
 #pragma once
 
+#include <errno.h>
 #include <vector>
 #include <math.h>
 #include <gsl/gsl_spline.h>
@@ -10,26 +11,21 @@
 #include <iostream>
 #include <boost/math/tools/roots.hpp>
 #include <limits>
+#include <stdlib.h>
+
+#define SILENT 0
+#define VERBOSE 0
 
 using boost::math::tools::eps_tolerance;
 using boost::math::tools::toms748_solve;
 
 const std::string GAL_MAGR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_abs_mag_r_k_best_density_func.dat";
-const std::string GAL_COLOR_GMR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_color_g-r_density_func.dat";
-
-
-#include <math.h>
-#include <stdlib.h>
-
-
-//double zbrent(Func func, double x1, double x2, double tol, double galaxy_density) {
+const std::string GAL_COLOR_GMR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_g-r_density_func.dat";
   
-// TODO Let's replace these with a more modern GSL functions soon
+// TODO Let's replace these with Boost functions soon
 double qromo(double (*func)(double), double a, double b, double (*choose)(double(*)(double), double, double, int));
 double midpnt(double (*func)(double), double a, double b, int n);
 
-#define SILENT 0
-#define VERBOSE 0
 
 // LOGGING
 #define LOG_VERBOSE(...)  if (!SILENT && VERBOSE) fprintf(stderr, __VA_ARGS__)
@@ -42,10 +38,10 @@ double gsl_spline_eval_extrap(const gsl_spline *spline, const double *x, const d
     // Constant extrapolation below range - this only happens due to floating point inaccuracy issues
     //std::cout << "Extrapolating spline at xq=" << xq << " with range [" << x[0] << ", " << x[n-1] << "]\n";
     if (xq < x[0]) {
-        std::cout << "xq is below the range. Extrapolating at left edge.\n";
+        LOG_VERBOSE("xq is below the range. Extrapolating at left edge.\n");
         return gsl_spline_eval(spline, x[0], acc);
     } else if (xq > x[n-1]) {
-        std::cout << "xq is above the range. Extrapolating at right edge.\n";
+        LOG_VERBOSE("xq is above the range. Extrapolating at right edge.\n");
         return gsl_spline_eval(spline, x[n-1], acc);
     } else {
         return gsl_spline_eval(spline, xq, acc);
@@ -161,20 +157,31 @@ public:
         logCumulativeDensity.resize(cnt);
 
         double sum = 0.0;
+        //double min = -80.0; // Minimum log cumulative density to avoid issues with log(0)
+        //double dmin = 0.01; // This is redundant
         cx[cnt - 1] = px[cnt - 1];
-        logCumulativeDensity[cnt - 1] = -80.0; // assume n(> last point) = 0
+        logCumulativeDensity[cnt - 1] = -80.0;; // assume n(> last point) = 0
+        //min += dmin;
         for (int i = cnt - 2; i >= 0; i--) {
             double dx = abs(px[i + 1] - px[i]);  // uneven bins ok, descending or ascending order ok
-            sum += 0.5 * (rho[i] + rho[i + 1]) * dx; // trapezoid area
+            double area = 0.5 * (rho[i] + rho[i + 1]) * dx; // trapezoid area
+            // Avoid issues with zero density bins. 
+            // Small enough to not affect results but big enough to prevent the log(sum) from being the same value in multiple bins.
+            // The spline fitting needs this. 
+            // TODO Depending on the exact meaning of double on other hardware this might require tweaking.
+            if (area < 1e-14) area = 1e-14; 
+            sum += area;
             cx[i] = px[i];
-            logCumulativeDensity[i] = (sum > 0.0) ? log(sum) : -80.0; // a min value in log space
+            logCumulativeDensity[i] = log(sum);
+            //min += dmin; // cannot repeat values for inversion
         }
 
+        
         // Fit spline to the cumulative density function
         acc = gsl_interp_accel_alloc();
-        spline = gsl_spline_alloc(gsl_interp_cspline, cnt);
+        spline = gsl_spline_alloc(gsl_interp_steffen, cnt);
         if (!spline || !acc) {
-            LOG_ERROR("Failed to allocate GSL spline for PCA cumulative\n");
+            LOG_ERROR("Failed to allocate GSL spline for CDF\n");
             exit(1);
         }
         // Reverse order if needed because GSL splines must be monotonically increasing in x
@@ -184,9 +191,44 @@ public:
         }
         int status = gsl_spline_init(spline, cx.data(), logCumulativeDensity.data(), cnt);
         if (status) {
-            LOG_ERROR("GSL spline init failed for PCA cumulative: %s\n", gsl_strerror(status));
+            LOG_ERROR("GSL spline init failed for CDF: %s\n", gsl_strerror(status));
             exit(1);
         }
+
+        
+        // Print out the logCumulativeDensity and cx values for debugging
+        LOG_VERBOSE("Cumulative density function values for %s:\n", filename.c_str());
+        for (int i = 0; i < cnt; i++) {
+            LOG_VERBOSE("  x: %.4f, logCumulativeDensity: %.6f\n", cx[i], logCumulativeDensity[i]);
+        }       
+
+        
+        // Now let's fit another spline for the inverse (reverse if needed)
+        cx_inv.resize(cnt);
+        logCumulativeDensity_inv.resize(cnt);
+        bool reverse = logCumulativeDensity[0] > logCumulativeDensity[cnt - 1]; 
+        for (int i = 0; i < cnt; i++) {
+            cx_inv[i] = reverse ? cx[cnt - 1 - i] : cx[i];
+            logCumulativeDensity_inv[i] = reverse ? logCumulativeDensity[cnt - 1 - i] : logCumulativeDensity[i];
+        }
+
+        inv_acc = gsl_interp_accel_alloc();
+        inv_spline = gsl_spline_alloc(gsl_interp_steffen, cnt);
+        if (!inv_spline || !inv_acc) {
+            LOG_ERROR("Failed to allocate GSL spline for CDF inverse\n");
+            exit(ENOMEM);
+        }
+        status = gsl_spline_init(inv_spline, logCumulativeDensity_inv.data(), cx_inv.data(), cnt);
+        if (status) {
+            LOG_ERROR("GSL spline init failed for CDF inverse: %s\n", gsl_strerror(status));
+            exit(ENOMEM);
+        }
+
+        // Print out the logCumulativeDensity and cx values for debugging
+        LOG_VERBOSE("Inverted cumulative density function values for %s:\n", filename.c_str());
+        for (int i = 0; i < cnt; i++) {
+            LOG_VERBOSE("  logCumulativeDensity: %.6f  x: %.4f, \n", logCumulativeDensity_inv[i], cx_inv[i]);
+        }    
 
         LOG_VERBOSE("Built cumulative density spline for %s with %d points.\n", filename.c_str(), cnt);
     }
@@ -208,11 +250,21 @@ public:
         return exp(gsl_spline_eval_extrap(spline, cx.data(), logCumulativeDensity.data(), cx.size(), value, acc));
     }
 
+    double eval_inverse(double density) {
+        // Given a cumulative density, return the corresponding property value using the inverse spline
+        return gsl_spline_eval_extrap(inv_spline, logCumulativeDensity.data(), cx.data(), cx.size(), log(density), inv_acc);
+    }
+
 private:
     std::vector<double> cx; // x values for the cumulative density function (same as PDF x values)
     std::vector<double> logCumulativeDensity; // log cumulative number density for each
     gsl_interp_accel* acc;
     gsl_spline* spline;
+
+    std::vector<double> cx_inv; // x values for the cumulative density function (same as PDF x values)
+    std::vector<double> logCumulativeDensity_inv; // log cumulative number density for each
+    gsl_interp_accel* inv_acc;
+    gsl_spline* inv_spline;
 
 };
 
@@ -325,6 +377,11 @@ public:
     }
 
     double match(double density) {
+        // Best approach is to use use an inverted spline of the CDF to directly get the property
+        return mag_cdf->eval_inverse(density); 
+
+        // Boost root finding approach. Slower
+        /*
         double min = std::min(mag_cdf->getLeftEdge(), mag_cdf->getRightEdge());
         double max = std::max(mag_cdf->getLeftEdge(), mag_cdf->getRightEdge());
 
@@ -337,15 +394,15 @@ public:
         int bits = 18;  // TODO what should it be?  1 / 2^bits tolerance I think is meaning
         eps_tolerance<double> tol(bits);
         boost::uintmax_t max_iter = 100;
-
-        // TODO switch to this after to see if the auto bracker is really better.
-        // std::pair<double, double> result = bracket_and_solve_root(func, guess, factor, rising, tol);
         //std::cout << "Matching galaxy density " << density << " to magnitude with bounds [" << min << ", " << max << "]..." << std::endl;
 
+        // std::pair<double, double> result = bracket_and_solve_root(func, guess, factor, rising, tol);
         std::pair<double, double> result = toms748_solve(func, min, max, tol, max_iter);
         //std::cout << "Matched galaxy density " << density << " to magnitude " << result.first << " with function value " << func(result.first) << std::endl;
         return result.first; // root is between result.first and result.second, but they should be very close given the tolerance
+        */
 
+        // Old Group Finder appoach. Slower
         //return exp(zbrent(func, min, max, 1.0E-5, density));
     }
     

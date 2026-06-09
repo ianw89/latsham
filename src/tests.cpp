@@ -128,14 +128,45 @@ void test_AMCDF_GalaxyAbsMag() {
     TEST_CASE(std::isfinite(val_low) && val_low < 1e-8, val_low, "CDF should handle extrapolation for low values");
     TEST_CASE(std::isfinite(val_high) && val_high > 1e-2, val_high, "CDF should handle extrapolation for high values");
     TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
+
+
+
+    printf("\n--- Testing Inverted Spline Smoothness and Monotonicity (Galaxy abs mag) ---\n");
+    std::vector<double> densities(100);
+    for (int i = 0; i < 100; i++) {
+        densities[i] = 1e-8 * pow(10, i * 0.1); // Sample densities logarithmically
+    }
+    prev_val = -9999;
+    is_smooth = true;
+    bool all_finite = true;
+    for (double d : densities) {
+        double mag = t.eval_inverse(d);       
+        if (!std::isfinite(mag)) {
+            all_finite = false;
+            printf("    WARNING: Non-finite magnitude for density %.2e\n", d);
+        }     
+
+        if (prev_val > -9999 && all_finite) {
+            // Monotonic Test
+            TEST_CASE(mag >= prev_val, mag, "Mag should get dimmer (larger number) as density goes up"); 
+
+            double ratio = mag / prev_val;
+            if (ratio > 1.25 || ratio < 0.75) {
+                is_smooth = false;
+                printf("    WARNING: Large jump detected (ratio=%.2e)\n", ratio);
+            }
+        }
+        prev_val = mag;
+    }
+    TEST_CASE(all_finite, all_finite, "All magnitudes from inverse spline should be finite");
+    TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
 }
 
-const std::string galgmrdensityfile = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_g-r_density_func.dat";
 
 void test_AMCDF_GalaxyGmR() {
     std::cout << "\n=== AMCDF TESTS (GALAXY COLOR g-r) ===\n";
 
-    AMCDF t(galgmrdensityfile);
+    AMCDF t(GAL_COLOR_GMR_DENSITY);
     std::vector<double> x_vals(20);
 
     printf("\n--- Testing Spline Smoothness and Monotonicity (Galaxy g-r) ---\n");
@@ -163,13 +194,13 @@ void test_AMCDF_GalaxyGmR() {
     TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
 
      // Test extrapolation behavior at boundaries
-    printf("\n--- Testing Boundary Behavior (Galaxy abs mag) ---\n");
+    printf("\n--- Testing Boundary Behavior (Galaxy g-r) ---\n");
     double extreme_low = -5.0;
     double val_low = t.eval(extreme_low);
     double extreme_high = 5.0;
     double val_high = t.eval(extreme_high);
 
-    TEST_CASE(std::isfinite(val_low) > 1e-2, val_low, "CDF should handle extrapolation for low values");
+    TEST_CASE(std::isfinite(val_low) && val_low > 1e-2, val_low, "CDF should handle extrapolation for low values");
     TEST_CASE(std::isfinite(val_high) && val_high < 1e-8, val_high, "CDF should handle extrapolation for high values");
     TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
 
@@ -180,9 +211,9 @@ void test_GalaxyMagMatcher() {
 
     auto matcher = GalaxyMagMatcher::get();
 
-    // The sim box will start at 1.56e-8 so we need at least this low density...
-    // Test matching at a few densities
-    std::vector<double> test_densities = {1e-9, 1e-8, 1e-6, 1e-4, 0.01, 0.03, 0.05}; // These should be within the range of the density function
+    // The sim box will start at 1.56e-8 so we need at least this low density.
+    // Currently cannot handle much higher densities than 0.05
+    std::vector<double> test_densities = {1e-9, 1e-8, 1e-6, 1e-4, 0.01, 0.03, 0.05}; 
     for (double dens : test_densities) {
         double mag = matcher.match(dens);
         TEST_CASE(std::isfinite(mag) && mag < -5 && mag > -30 , mag, "Matched magnitude should be finite and reasonable");
@@ -202,6 +233,8 @@ int main () {
     test_AMCDF_GalaxyGmR();
     test_GalaxyMagMatcher();
 
-    std::cout << "All tests passed successfully.\n";
+    std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;
+    std::cout << "All tests passed successfully." << std::endl;
+    std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;
     return 0;
 }
