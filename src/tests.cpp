@@ -2,6 +2,17 @@
 #include <cassert>
 #include <sstream>
 
+#define TEST_CASE2(condition, value, result, message) \
+    if (!(condition)) { \
+        std::cerr << "! TEST FAILED ! : " << message << "\n" \
+                  << "  Test Value: " << (value) << "\n" \
+                  << "  Result: " << (result) << "\n" \
+                  << "  File: " << __FILE__ << ", Line: " << __LINE__ << "\n"; \
+        std::abort(); \
+    } else { \
+        std::cout << "Test passed: " << message << ". Value: " << (value) << ", Result: " << (result) << "\n"; \
+    }
+
 #define TEST_CASE(condition, value, message) \
     if (!(condition)) { \
         std::cerr << "! TEST FAILED ! : " << message << "\n" \
@@ -206,6 +217,47 @@ void test_AMCDF_GalaxyGmR() {
 
 }
 
+void test_AMCDF_GalICA1() {
+    std::cout << "\n=== AMCDF TESTS (GALAXY ICA 1) ===\n";
+
+    AMCDF t("/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_ica1_density_func.dat");
+    double range = abs( t.getRightEdge() - t.getLeftEdge() );
+    printf("ICA1 range: [%.3f, %.3f]\n", t.getLeftEdge(), t.getRightEdge());
+
+    printf("\n--- Testing Inverted Spline Smoothness and Monotonicity (Galaxy ICA 1) ---\n");
+    std::vector<double> densities(100); // Want to sample densiities slowly at when they are large
+    for (int i = 0; i < 61; i++) {
+        densities[i] = 1e-8 * pow(10, i * 0.1); 
+    }
+    for (int i = 61; i < 100; i++) {
+        densities[i] = 1e-8 * pow(10, 60 * 0.1) * pow(10, (i-60) * 0.02); // Sample more linearly at higher densities where the function is changing more rapidly
+    }
+    double prev_val = 9999;
+    bool is_smooth = true;
+    bool all_finite = true;
+    for (double d : densities) {
+        double c1 = t.eval_inverse(d);       
+        if (!std::isfinite(c1)) {
+            all_finite = false;
+            printf("    WARNING: Non-finite magnitude for density %.2e\n", d);
+        }     
+
+        if (prev_val < 9999 && all_finite) {
+            TEST_CASE2(c1 <= prev_val, d, c1, "ICA1 should get smaller as density goes up"); 
+
+            double dx = abs(c1 - prev_val);
+            double ratio = dx / range;
+            if (ratio > 0.05) {
+                is_smooth = false;
+                printf("    WARNING: Large jump detected (ratio=%.2e)\n", ratio);
+            }
+        }
+        prev_val = c1;
+    }
+    TEST_CASE(all_finite, all_finite, "All magnitudes from inverse spline should be finite");
+    TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
+}
+
 void test_GalaxyMagMatcher() {
     printf("\n=== GalaxyMagMatcher TESTS ===\n");
 
@@ -231,6 +283,7 @@ int main () {
     test_AMCDF_HaloICA1();
     test_AMCDF_GalaxyAbsMag();
     test_AMCDF_GalaxyGmR();
+    test_AMCDF_GalICA1();
     test_GalaxyMagMatcher();
 
     std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;

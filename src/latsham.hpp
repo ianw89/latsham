@@ -38,10 +38,10 @@ double gsl_spline_eval_extrap(const gsl_spline *spline, const double *x, const d
     // Constant extrapolation below range - this only happens due to floating point inaccuracy issues
     //std::cout << "Extrapolating spline at xq=" << xq << " with range [" << x[0] << ", " << x[n-1] << "]\n";
     if (xq < x[0]) {
-        LOG_VERBOSE("xq is below the range. Extrapolating at left edge.\n");
+        LOG_VERBOSE("xq (%.3f) is below the range. Extrapolating at left edge.\n", xq);
         return gsl_spline_eval(spline, x[0], acc);
     } else if (xq > x[n-1]) {
-        LOG_VERBOSE("xq is above the range. Extrapolating at right edge.\n");
+        LOG_VERBOSE("xq (%.3f) is above the range. Extrapolating at right edge.\n", xq);
         return gsl_spline_eval(spline, x[n-1], acc);
     } else {
         return gsl_spline_eval(spline, xq, acc);
@@ -151,7 +151,8 @@ public:
         if (cnt < 100) {
             LOG_WARN("Density function %s has only %d points, which may be too few for accurate CDF integration.\n", filename.c_str(), cnt);
         }
-        // TODO more sanity checks here
+        // TODO more sanity checks here. Maybe on the density numbers
+        // In the group finder the halo mass function is in different units
 
         cx.resize(cnt);
         logCumulativeDensity.resize(cnt);
@@ -250,12 +251,12 @@ public:
         return exp(gsl_spline_eval_extrap(spline, cx.data(), logCumulativeDensity.data(), cx.size(), value, acc));
     }
 
-    double eval_inverse(double density) {
+    double eval_inverse(double cumulativeDensity) {
         // Given a cumulative density, return the corresponding property value using the inverse spline
-        return gsl_spline_eval_extrap(inv_spline, logCumulativeDensity.data(), cx.data(), cx.size(), log(density), inv_acc);
+        return gsl_spline_eval_extrap(inv_spline, logCumulativeDensity_inv.data(), cx_inv.data(), cx_inv.size(), log(cumulativeDensity), inv_acc);
     }
 
-private:
+//private:
     std::vector<double> cx; // x values for the cumulative density function (same as PDF x values)
     std::vector<double> logCumulativeDensity; // log cumulative number density for each
     gsl_interp_accel* acc;
@@ -377,6 +378,10 @@ public:
     }
 
     double match(double density) {
+        if (density > 0.05) {
+            LOG_WARN("Warning: Matching density %.3e is too dense for current density functions.\n", density);
+        }
+
         // Best approach is to use use an inverted spline of the CDF to directly get the property
         return mag_cdf->eval_inverse(density); 
 
