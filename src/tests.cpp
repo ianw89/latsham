@@ -1,4 +1,5 @@
 #include "latsham.hpp"
+#include "models.hpp"
 #include <cassert>
 #include <sstream>
 
@@ -220,7 +221,7 @@ void test_AMCDF_GalaxyGmR() {
 void test_AMCDF_GalICA1() {
     std::cout << "\n=== AMCDF TESTS (GALAXY ICA 1) ===\n";
 
-    AMCDF t("/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_ica1_density_func.dat");
+    AMCDF t(GAL_2P_ICA1_DENSITY);
     double range = abs( t.getRightEdge() - t.getLeftEdge() );
     printf("ICA1 range: [%.3f, %.3f]\n", t.getLeftEdge(), t.getRightEdge());
 
@@ -278,13 +279,80 @@ void test_GalaxyMagMatcher() {
     TEST_CASE(mag2 > mag1, mag2 - mag1, "Higher density should give fainter magnitude");
 }
 
+void test_Gal2PICAMatchers() {
+    printf("\n=== Galaxy 2P ICA Matchers TESTS ===\n");
+
+    auto matcher1 = Galaxy2P_ICA1Matcher::get();
+    auto matcher2 = Galaxy2P_ICA2Matcher::get();
+
+    // The sim box will start at 1.56e-8 so we need at least this low density.
+    // Currently cannot handle much higher densities than 0.05
+    std::vector<double> test_densities = {1e-9, 1e-8, 1e-6, 1e-4, 0.01, 0.03, 0.05}; 
+    double prev1 = 9999;
+    double prev2 = 9999;
+    for (double dens : test_densities) {
+        double v1 = matcher1.match(dens);
+        double v2 = matcher2.match(dens);
+        TEST_CASE(std::isfinite(v1) && v1 > -10 && v1 < 10 , v1, "Matched ICA1 value should be finite and reasonable");
+        TEST_CASE(std::isfinite(v2) && v2 > -10 && v2 < 10 , v2, "Matched ICA2 value should be finite and reasonable");
+        printf("  Density=%.2e -> ICA1=%.3f, ICA2=%.3f\n", dens, v1, v2);
+
+        if (prev1 < 9999 && prev2 < 9999) {
+            TEST_CASE(v1 <= prev1, v1, "ICA1 should get smaller as density goes up"); 
+            TEST_CASE(v2 <= prev2, v2, "ICA2 should get smaller as density goes up"); 
+            prev1 = v1;
+            prev2 = v2;
+        }
+    }
+
+    // TODO check that when transformed back to mag/color the values are reasonable.
+    // On the edges this will force me to re-abundance match the results onto the actual mag/color distributions
+    // to deal with the higher-order residual correlation issue.
+}
+
+void test_LatentModel() {
+    printf("\n=== LatentModel TESTS ===\n");
+
+    LatentModel model = LatentModel(GAL_2P_LATENT_MODEL_TEXT_FILE);
+
+    // Typical galaxy values  should go to middle of a latent space
+    Galaxy g = Galaxy();
+    g.abs_mag_r = -20.0;
+    g.color_g_r = 0.8;
+    model.forward_transform(g);
+    TEST_CASE(std::isfinite(g.lat1) && g.lat1 > -2 && g.lat1 < 2 , g.lat1, "Forward transform Latent value 1 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat2) && g.lat2 > -2 && g.lat2 < 2 , g.lat2, "Forward transform Latent value 2 should be finite and reasonable");
+    model.inverse_transform(g);
+    TEST_CASE(isclose(g.abs_mag_r, -20.0, 1e-5), g.abs_mag_r, "Roundtrip abs_mag_r should be very close to original");
+    TEST_CASE(isclose(g.color_g_r, 0.8, 1e-5), g.color_g_r, "Roundtrip color_g_r should be very close to original");
+
+    // Inverse transform
+    g.lat1 = -2.0; 
+    g.lat2 = -2.0;
+    model.inverse_transform(g);
+    TEST_CASE(std::isfinite(g.abs_mag_r) && g.abs_mag_r > -20 , g.abs_mag_r, "Inverse transform should original property values and be finite");
+    TEST_CASE(std::isfinite(g.color_g_r) && g.color_g_r < 0.75, g.color_g_r, "Inverse transform should original property values and be finite");
+
+    /*
+    g.lat1 = 5.0; // bright
+    g.lat2 = 5.0; // old/red
+    model.inverse_transform(g);
+    TEST_CASE(std::isfinite(g.abs_mag_r) && g.abs_mag_r < -22 && g.abs_mag_r > -26 , g.abs_mag_r, "Inverse transform abs_mag_r should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.color_g_r) && g.color_g_r > 0.9 && g.color_g_r < 10.0 , g.color_g_r, "Inverse transform color_g_r should be finite and reasonable");
+    printf("  After inverse transform with latents set: abs_mag_r=%.10f, color_g_r=%.10f\n", g.abs_mag_r, g.color_g_r);
+    */
+    
+}
+
 int main () {
     test_TabulatedDensityFunction();
     test_AMCDF_HaloICA1();
     test_AMCDF_GalaxyAbsMag();
     test_AMCDF_GalaxyGmR();
     test_AMCDF_GalICA1();
+    test_LatentModel();
     test_GalaxyMagMatcher();
+    test_Gal2PICAMatchers();
 
     std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;
     std::cout << "All tests passed successfully." << std::endl;

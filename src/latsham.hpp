@@ -1,3 +1,12 @@
+/***********************************************************************
+ * "latsham.hpp"
+ * This file is a header-only library containing the core interface for
+ * latent abundance matching models.
+ * 
+ * This file is part of the latsham package. 
+ * Copyright (c) 2026 Ian Williams under the MIT License.
+ ***********************************************************************/
+
 #pragma once
 
 #include <errno.h>
@@ -19,9 +28,6 @@
 using boost::math::tools::eps_tolerance;
 using boost::math::tools::toms748_solve;
 
-const std::string GAL_MAGR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_abs_mag_r_k_best_density_func.dat";
-const std::string GAL_COLOR_GMR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_g-r_density_func.dat";
-  
 // TODO Let's replace these with Boost functions soon
 double qromo(double (*func)(double), double a, double b, double (*choose)(double(*)(double), double, double, int));
 double midpnt(double (*func)(double), double a, double b, int n);
@@ -93,7 +99,23 @@ std::ifstream openfile(const std::string &filename) {
     return ifs;
 }
 
+/**
+ * A simple interface for a model that has properties and latent properties that can be accessed by index.
+ * The ordering of the properties must match whatever is in the associated LatentModel.
+ */
+struct Transformable {
+    virtual double getProperty(int num) = 0;
+    virtual void setProperty(int num, double value) = 0;
+    virtual double getLatentProperty(int num) = 0;
+    virtual void setLatentProperty(int num, double value) = 0;
+};
 
+
+/**
+ * A tabulated density function loaded from a file. 
+ * The file should have two columns: x and density(x). 
+ * The density is assumed to be in units of number/(Mpc/h)^3. 
+ */
 class TabulatedDensityFunction {
 
 public:
@@ -370,59 +392,121 @@ class AbundanceMatchingManager {
 };
   
 
-class GalaxyMagMatcher : public AbundanceMatchingManager {
+// Class that holds a model matrices for transforming data between an original feature space and a latent space.
+// Supports invertable linear PCA/ICA like models with whitening.
+class LatentModel {
 public:
-    static GalaxyMagMatcher& get() {
-        static GalaxyMagMatcher inst;
-        return inst;
-    }
 
-    double match(double density) {
-        if (density > 0.05) {
-            LOG_WARN("Warning: Matching density %.3e is too dense for current density functions.\n", density);
+    LatentModel(std::string model_file) {
+        std::ifstream fp(model_file);
+        if (!fp) { fprintf(stderr, "Could not open %s\n", model_file); exit(1); }
+        std::string line;
+        int block = 0;
+        int j = 0;
+        while (std::getline(fp, line)) {
+            // Look for # n_features: <int>
+            if (line.find("# n_features:") != std::string::npos) {
+                std::istringstream ss(line.substr(13));
+                ss >> NFEAT;
+                if (NFEAT < 2) {
+                    LOG_ERROR("Error: n_features must be at least 2, but got %d\n", NFEAT);
+                    exit(1);
+                }
+                scaler_mean.resize(NFEAT);
+                scaler_scale.resize(NFEAT);
+                pca_mean.resize(NFEAT);
+                W.resize(NFEAT);
+                for (int i = 0; i < NFEAT; i++) W[i].resize(NFEAT);
+                MIXING.resize(NFEAT);
+                for (int i = 0; i < NFEAT; i++) MIXING[i].resize(NFEAT);
+                continue;
+            }
+
+            // Ignore other comments
+            if (line.empty() || line[0] == '#') continue;
+
+            // Ensure NFEAT set by now
+            if (NFEAT <= 1) {
+                LOG_ERROR("Error: n_features must be specified in the model file before data blocks.\n");
+                exit(1);
+            }
+
+            std::istringstream ss(line);
+            switch (block) {
+                case 0: for (int i = 0; i < NFEAT; i++) ss >> scaler_mean[i]; break;
+                case 1: for (int i = 0; i < NFEAT; i++) ss >> scaler_scale[i]; break;
+                case 2: for (int i = 0; i < NFEAT; i++) ss >> pca_mean[i]; break;
+                case 3: for (int i = 0; i < NFEAT; i++) ss >> W[j][i]; j++; break;
+                // If there is a mixing matrix for the inverse transform, we need to read that in too.
+                case 4: for (int i = 0; i < NFEAT; i++) ss >> MIXING[j][i]; j++; use_mixing=true; break;
+            }
+            if (j == NFEAT) 
+                j = 0;
+            if (j == 0)
+                block++;
         }
-
-        // Best approach is to use use an inverted spline of the CDF to directly get the property
-        return mag_cdf->eval_inverse(density); 
-
-        // Boost root finding approach. Slower
-        /*
-        double min = std::min(mag_cdf->getLeftEdge(), mag_cdf->getRightEdge());
-        double max = std::max(mag_cdf->getLeftEdge(), mag_cdf->getRightEdge());
-
-        auto func = [this, density](double value) {
-            double matched_dens = mag_cdf->eval(value);
-            //std::cout << "Evaluated density at value " << value << " is " << matched_dens << " for target density " << density << std::endl;
-            return matched_dens - density;        
-        };
-
-        int bits = 18;  // TODO what should it be?  1 / 2^bits tolerance I think is meaning
-        eps_tolerance<double> tol(bits);
-        boost::uintmax_t max_iter = 100;
-        //std::cout << "Matching galaxy density " << density << " to magnitude with bounds [" << min << ", " << max << "]..." << std::endl;
-
-        // std::pair<double, double> result = bracket_and_solve_root(func, guess, factor, rising, tol);
-        std::pair<double, double> result = toms748_solve(func, min, max, tol, max_iter);
-        //std::cout << "Matched galaxy density " << density << " to magnitude " << result.first << " with function value " << func(result.first) << std::endl;
-        return result.first; // root is between result.first and result.second, but they should be very close given the tolerance
-        */
-
-        // Old Group Finder appoach. Slower
-        //return exp(zbrent(func, min, max, 1.0E-5, density));
+        LOG_VERBOSE("Loaded halo latent model with NFEAT = %d, use_mixing = %d\n", NFEAT, use_mixing);
+        //print_model();
     }
-    
-    //~GalaxyMagMatcher() {
-    //    delete mag_cdf;
-    //}
+
+    // Forward transform: original feature space -> Latent coords
+    void forward_transform(Transformable &obj) {
+        double x[NFEAT];
+        double xs[NFEAT];
+        for (int j = 0; j < NFEAT; j++)
+            xs[j] = (obj.getProperty(j) - scaler_mean[j]) / scaler_scale[j] - pca_mean[j];
+        for (int i = 0; i < NFEAT; i++) {
+            x[i] = 0;
+            for (int j = 0; j < NFEAT; j++)
+                x[i] += W[i][j] * xs[j];
+            obj.setLatentProperty(i, x[i]);
+        }
+    }
+
+    // Inverse transform: Latent coords -> original feature space
+    void inverse_transform(Transformable &obj) {
+        double xs[NFEAT] = {0};
+        for (int j = 0; j < NFEAT; j++)
+            for (int i = 0; i < NFEAT; i++) {
+                if (use_mixing)
+                    xs[j] += MIXING[j][i] * obj.getLatentProperty(i);
+                else
+                    xs[j] += W[i][j] * obj.getLatentProperty(i); 
+            }
+
+        for (int i = 0; i < NFEAT; i++)
+            obj.setProperty(i, (xs[i] + pca_mean[i]) * scaler_scale[i] + scaler_mean[i]);
+    }
+
+    void print_model() {
+        std::cout << "Scaler mean: ";
+        for (int i = 0; i < NFEAT; i++) std::cout << scaler_mean[i] << " ";
+        std::cout << "\nScaler scale: ";
+        for (int i = 0; i < NFEAT; i++) std::cout << scaler_scale[i] << " ";
+        std::cout << "\nLatent space mean: ";
+        for (int i = 0; i < NFEAT; i++) std::cout << pca_mean[i] << " ";
+        std::cout << "\nLatent space components (W):\n";
+        for (int i = 0; i < NFEAT; i++) {
+            for (int j = 0; j < NFEAT; j++)
+                std::cout << W[i][j] << " ";
+            std::cout << "\n";
+        }
+        if (use_mixing) {
+            std::cout << "Mixing matrix:\n";
+            for (int i = 0; i < NFEAT; i++) {
+                for (int j = 0; j < NFEAT; j++)
+                    std::cout << MIXING[i][j] << " ";
+                std::cout << "\n";
+            }
+        }
+    }
+
 private:
-    AMCDF *mag_cdf;
-
-    GalaxyMagMatcher() {
-        // Load the galaxy magnitude density function and build the spline for abundance matching
-        mag_cdf = new AMCDF(GAL_MAGR_DENSITY);
-    }
-
-
+    int NFEAT = 0;
+    std::vector<double> scaler_mean;
+    std::vector<double> scaler_scale;
+    std::vector<double> pca_mean;
+    std::vector<std::vector<double>> W; // W[component][feature]
+    std::vector<std::vector<double>> MIXING; // mixing_[feature][component]
+    bool use_mixing = false; 
 };
-
-

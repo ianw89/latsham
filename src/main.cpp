@@ -1,3 +1,8 @@
+/***********************************************************************
+ * This file is part of the latsham package. 
+ * Copyright (c) 2026 Ian Williams under the MIT License.
+ ***********************************************************************/
+
 #include <cstdio>
 #include <unistd.h>
 #include <argp.h>
@@ -13,6 +18,7 @@
 #include <hdf5.h>
 #include <random>
 #include "latsham.hpp"
+#include "models.hpp"
 
 // Message passing protocol via a pipe to python wrapper
 #define MSG_REQUEST 0
@@ -34,23 +40,6 @@ const std::string HALO_CATALOG = "/mount/sirocco1/imw2293/GROUP_CAT/DATA/POPMOCK
 double constexpr BOX_SIZE = 400.0; // Mpc/h, from the simulation specs
 double constexpr SIM_VOLUME = BOX_SIZE * BOX_SIZE * BOX_SIZE; // (Mpc/h)^3
 // ('index', 'ID', 'upid', 'M200b', 'Mpeak', 'mvir', 'rvir', 'rs', 'vmax', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'Halfmass_Scale', 'Spin', 'c', 'LOGMHALO', 'NOISE')
-
-struct halo {
-    // Halo Properties
-    double x,y,z;
-    double vx,vy,vz;
-    double logmhalo; // log10 of M200b
-    double halfmass_scale;
-    double c;
-    double spin;
-
-    // temp property used for ranking
-    double rank;
-
-    // Assigned Galaxy Properties
-    double abs_mag_r; // absolute magnitude in the r band, k-corrected to z=0.1, with h=1.0
-    double color_g_r;   // g-r color (mag)
-};
 
 static std::string to_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
@@ -85,7 +74,7 @@ static std::vector<double> read_field(hid_t ds, const std::string& field_lower,
     return buf;
 }
 
-std::vector<halo> read_halo_catalog(const std::string& path) {
+std::vector<Halo> read_halo_catalog(const std::string& path) {
     HighFive::File file(path, HighFive::File::ReadOnly);
     auto dataset = file.getDataSet("halos/table");
     hsize_t n = dataset.getDimensions()[0];
@@ -105,22 +94,22 @@ std::vector<halo> read_halo_catalog(const std::string& path) {
     auto x_v        = read_field(ds_id, "x",              name_map, n);
     auto y_v        = read_field(ds_id, "y",              name_map, n);
     auto z_v        = read_field(ds_id, "z",              name_map, n);
-    auto vx_v       = read_field(ds_id, "vx",             name_map, n);
-    auto vy_v       = read_field(ds_id, "vy",             name_map, n);
-    auto vz_v       = read_field(ds_id, "vz",             name_map, n);
+    //auto vx_v       = read_field(ds_id, "vx",             name_map, n);
+    //auto vy_v       = read_field(ds_id, "vy",             name_map, n);
+    //auto vz_v       = read_field(ds_id, "vz",             name_map, n);
     auto logm_v     = read_field(ds_id, "logmhalo",       name_map, n);
     auto halfm_v    = read_field(ds_id, "halfmass_scale", name_map, n);
     auto c_v        = read_field(ds_id, "c",              name_map, n);
     auto spin_v     = read_field(ds_id, "spin",           name_map, n);
 
-    std::vector<halo> halos(n);
+    std::vector<Halo> halos(n);
     for (hsize_t i = 0; i < n; ++i) {
         halos[i].x              = x_v[i];
         halos[i].y              = y_v[i];
         halos[i].z              = z_v[i];
-        halos[i].vx             = vx_v[i];
-        halos[i].vy             = vy_v[i];
-        halos[i].vz             = vz_v[i];
+        //halos[i].vx             = vx_v[i];
+        //halos[i].vy             = vy_v[i];
+        //halos[i].vz             = vz_v[i];
         halos[i].logmhalo       = logm_v[i];
         halos[i].halfmass_scale = halfm_v[i];
         halos[i].c              = c_v[i];
@@ -171,7 +160,7 @@ struct Model1Params {
 };
 
 
-void do_matching(Model1Params params, std::vector<halo>& halos) {
+void do_matching(Model1Params params, std::vector<Halo>& halos) {
 
     auto t0 = std::chrono::high_resolution_clock::now();
 
@@ -182,12 +171,12 @@ void do_matching(Model1Params params, std::vector<halo>& halos) {
     double std_dev = params.scatter;  
     std::normal_distribution<double> gaussian_dist(mean, std_dev);
 
-    for (halo &h : halos) {
+    for (Halo &h : halos) {
         h.rank = h.logmhalo + gaussian_dist(gen);
     }
 
     std::sort(halos.begin(), halos.end(),
-        [](const halo& a, const halo& b) { 
+        [](const Halo& a, const Halo& b) { 
             return a.rank > b.rank; 
         });
     
@@ -195,9 +184,9 @@ void do_matching(Model1Params params, std::vector<halo>& halos) {
 
     // Now abundance match to galaxy r band abs magnitude using
     double density = 0.0;
-    for (halo& h : halos) {
+    for (Halo& h : halos) {
         density += 1.0 / SIM_VOLUME; // cumulative density of halos above this mass
-        h.abs_mag_r = GalaxyMagMatcher::get().match(density);
+        h.galaxy.abs_mag_r = GalaxyMagMatcher::get().match(density);
     }
 
     auto t2 = std::chrono::high_resolution_clock::now();
@@ -212,7 +201,7 @@ void do_matching(Model1Params params, std::vector<halo>& halos) {
 
     // Write the central galaxies for this mock
     for (int i=0; i < halos.size(); ++i) {
-        if (halos[i].abs_mag_r < -21.0 || halos[i].abs_mag_r > -20.0)
+        if (halos[i].galaxy.abs_mag_r < -21.0 || halos[i].galaxy.abs_mag_r > -20.0)
             continue;
 
         // Corrfunc only needs x,y,z locations. The rest was stuff group finder wrote; not sure why.
@@ -289,7 +278,7 @@ std::vector<double> await_request() {
 
 int main(int argc, char **argv) {
 
-    LOG_INFO("Welcome to Latent-SHAM");
+    LOG_INFO("Welcome to Latent-SHAM\n");
 
     argp_parse (&argp, argc, argv, 0, 0, nullptr);
 
@@ -297,14 +286,14 @@ int main(int argc, char **argv) {
 
     auto t0 = std::chrono::high_resolution_clock::now();
 
-    std::vector<halo> halos = read_halo_catalog(HALO_CATALOG);
+    std::vector<Halo> halos = read_halo_catalog(HALO_CATALOG);
 
     auto t1 = std::chrono::high_resolution_clock::now();
 
     // Remove halos below a mass threshold for now
     double logmhalo_cut = 11.0;
     halos.erase(std::remove_if(halos.begin(), halos.end(),
-        [logmhalo_cut](const halo& h) { return h.logmhalo < logmhalo_cut; }), halos.end());
+        [logmhalo_cut](const Halo& h) { return h.logmhalo < logmhalo_cut; }), halos.end());
 
     auto t2 = std::chrono::high_resolution_clock::now();
 
