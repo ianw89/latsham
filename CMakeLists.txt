@@ -14,6 +14,7 @@ set(HDF5_ROOT "/usr/local/anaconda3n/pkgs/hdf5-1.12.1-h2b7332f_3" CACHE PATH "HD
 find_package(HDF5 REQUIRED COMPONENTS C)
 find_package(GSL REQUIRED)
 find_package(Boost REQUIRED)
+find_package(OpenMP REQUIRED)
 
 add_library(HighFive INTERFACE)
 target_include_directories(HighFive INTERFACE
@@ -27,11 +28,11 @@ target_include_directories(latsham PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(latsham PRIVATE HighFive GSL::gsl GSL::gslcblas)
+target_link_libraries(latsham PRIVATE HighFive GSL::gsl GSL::gslcblas OpenMP::OpenMP_CXX)
 
 add_executable(tests src/tests.cpp)
 target_include_directories(tests PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(tests PRIVATE HighFive GSL::gsl GSL::gsl)
+target_link_libraries(tests PRIVATE HighFive GSL::gsl GSL::gslcblas OpenMP::OpenMP_CXX)

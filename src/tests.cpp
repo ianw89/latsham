@@ -303,15 +303,22 @@ void test_Gal2PICAMatchers() {
             prev1 = v1;
             prev2 = v2;
         }
+
+        Galaxy g;
+        g.lat1 = v1;
+        g.lat2 = v2;
+        
     }
 
-    // TODO check that when transformed back to mag/color the values are reasonable.
+    // Check that when transformed back to mag/color the values are reasonable.
     // On the edges this will force me to re-abundance match the results onto the actual mag/color distributions
     // to deal with the higher-order residual correlation issue.
+
+
 }
 
-void test_LatentModel() {
-    printf("\n=== LatentModel TESTS ===\n");
+void test_Galaxy_LatentModel() {
+    printf("\n=== Galaxy LatentModel TESTS ===\n");
 
     LatentModel model = LatentModel(GAL_2P_LATENT_MODEL_TEXT_FILE);
 
@@ -344,13 +351,32 @@ void test_LatentModel() {
     
 }
 
+void test_Halo_LatentModel() {
+    printf("\n=== Halo LatentModel TESTS ===\n");
+
+     LatentModel model = LatentModel(HALO_2P_LATENT_MODEL_TEXT_FILE);
+
+     // Typical halo values  should go to middle of a latent space
+    Halo h = Halo();
+    h.logmhalo = 12.0;
+    h.halfmass_scale = 0.3;
+    model.forward_transform(h);
+    TEST_CASE(std::isfinite(h.lat1) && h.lat1 > -2 && h.lat1 < 2 , h.lat1, "Forward transform Latent value 1 should be finite and reasonable");
+    TEST_CASE(std::isfinite(h.lat2) && h.lat2 > -2 && h.lat2 < 2 , h.lat2, "Forward transform Latent value 2 should be finite and reasonable");
+    model.inverse_transform(h);
+    TEST_CASE(isclose(h.logmhalo, 12.0, 1e-5), h.logmhalo, "Roundtrip logmhalo should be very close to original");  
+    TEST_CASE(isclose(h.halfmass_scale, 0.3, 1e-5), h.halfmass_scale, "Roundtrip halfmass_scale should be very close to original");
+
+}
+
 int main () {
     test_TabulatedDensityFunction();
     test_AMCDF_HaloICA1();
     test_AMCDF_GalaxyAbsMag();
     test_AMCDF_GalaxyGmR();
     test_AMCDF_GalICA1();
-    test_LatentModel();
+    test_Galaxy_LatentModel();
+    test_Halo_LatentModel();
     test_GalaxyMagMatcher();
     test_Gal2PICAMatchers();
 

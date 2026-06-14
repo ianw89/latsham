@@ -124,7 +124,7 @@ public:
         n = filesize(filename);
         px.resize(n);
         rho.resize(n);
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n; ++i)
             fp >> px[i] >> rho[i];
         fp.close();
         LOG_VERBOSE("Loaded density function with %d points from %s\n", n, filename.c_str());    }
@@ -221,7 +221,7 @@ public:
         
         // Print out the logCumulativeDensity and cx values for debugging
         LOG_VERBOSE("Cumulative density function values for %s:\n", filename.c_str());
-        for (int i = 0; i < cnt; i++) {
+        for (int i = 0; i < cnt; ++i) {
             LOG_VERBOSE("  x: %.4f, logCumulativeDensity: %.6f\n", cx[i], logCumulativeDensity[i]);
         }       
 
@@ -230,7 +230,7 @@ public:
         cx_inv.resize(cnt);
         logCumulativeDensity_inv.resize(cnt);
         bool reverse = logCumulativeDensity[0] > logCumulativeDensity[cnt - 1]; 
-        for (int i = 0; i < cnt; i++) {
+        for (int i = 0; i < cnt; ++i) {
             cx_inv[i] = reverse ? cx[cnt - 1 - i] : cx[i];
             logCumulativeDensity_inv[i] = reverse ? logCumulativeDensity[cnt - 1 - i] : logCumulativeDensity[i];
         }
@@ -249,7 +249,7 @@ public:
 
         // Print out the logCumulativeDensity and cx values for debugging
         LOG_VERBOSE("Inverted cumulative density function values for %s:\n", filename.c_str());
-        for (int i = 0; i < cnt; i++) {
+        for (int i = 0; i < cnt; ++i) {
             LOG_VERBOSE("  logCumulativeDensity: %.6f  x: %.4f, \n", logCumulativeDensity_inv[i], cx_inv[i]);
         }    
 
@@ -416,9 +416,9 @@ public:
                 scaler_scale.resize(NFEAT);
                 pca_mean.resize(NFEAT);
                 W.resize(NFEAT);
-                for (int i = 0; i < NFEAT; i++) W[i].resize(NFEAT);
+                for (int i = 0; i < NFEAT; ++i) W[i].resize(NFEAT);
                 MIXING.resize(NFEAT);
-                for (int i = 0; i < NFEAT; i++) MIXING[i].resize(NFEAT);
+                for (int i = 0; i < NFEAT; ++i) MIXING[i].resize(NFEAT);
                 continue;
             }
 
@@ -434,16 +434,16 @@ public:
             std::istringstream ss(line);
             switch (block) {
                 case 0: for (int i = 0; i < NFEAT; i++) ss >> scaler_mean[i]; break;
-                case 1: for (int i = 0; i < NFEAT; i++) ss >> scaler_scale[i]; break;
-                case 2: for (int i = 0; i < NFEAT; i++) ss >> pca_mean[i]; break;
-                case 3: for (int i = 0; i < NFEAT; i++) ss >> W[j][i]; j++; break;
+                case 1: for (int i = 0; i < NFEAT; ++i) ss >> scaler_scale[i]; break;
+                case 2: for (int i = 0; i < NFEAT; ++i) ss >> pca_mean[i]; break;
+                case 3: for (int i = 0; i < NFEAT; ++i) ss >> W[j][i]; ++j; break;
                 // If there is a mixing matrix for the inverse transform, we need to read that in too.
-                case 4: for (int i = 0; i < NFEAT; i++) ss >> MIXING[j][i]; j++; use_mixing=true; break;
+                case 4: for (int i = 0; i < NFEAT; ++i) ss >> MIXING[j][i]; ++j; use_mixing=true; break;
             }
             if (j == NFEAT) 
                 j = 0;
             if (j == 0)
-                block++;
+                ++block;
         }
         LOG_VERBOSE("Loaded halo latent model with NFEAT = %d, use_mixing = %d\n", NFEAT, use_mixing);
         //print_model();
@@ -453,11 +453,11 @@ public:
     void forward_transform(Transformable &obj) {
         double x[NFEAT];
         double xs[NFEAT];
-        for (int j = 0; j < NFEAT; j++)
+        for (int j = 0; j < NFEAT; ++j)
             xs[j] = (obj.getProperty(j) - scaler_mean[j]) / scaler_scale[j] - pca_mean[j];
-        for (int i = 0; i < NFEAT; i++) {
+        for (int i = 0; i < NFEAT; ++i) {
             x[i] = 0;
-            for (int j = 0; j < NFEAT; j++)
+            for (int j = 0; j < NFEAT; ++j)
                 x[i] += W[i][j] * xs[j];
             obj.setLatentProperty(i, x[i]);
         }
@@ -466,35 +466,35 @@ public:
     // Inverse transform: Latent coords -> original feature space
     void inverse_transform(Transformable &obj) {
         double xs[NFEAT] = {0};
-        for (int j = 0; j < NFEAT; j++)
-            for (int i = 0; i < NFEAT; i++) {
+        for (int j = 0; j < NFEAT; ++j)
+            for (int i = 0; i < NFEAT; ++i) {
                 if (use_mixing)
                     xs[j] += MIXING[j][i] * obj.getLatentProperty(i);
                 else
                     xs[j] += W[i][j] * obj.getLatentProperty(i); 
             }
 
-        for (int i = 0; i < NFEAT; i++)
+        for (int i = 0; i < NFEAT; ++i)
             obj.setProperty(i, (xs[i] + pca_mean[i]) * scaler_scale[i] + scaler_mean[i]);
     }
 
     void print_model() {
         std::cout << "Scaler mean: ";
-        for (int i = 0; i < NFEAT; i++) std::cout << scaler_mean[i] << " ";
+        for (int i = 0; i < NFEAT; ++i) std::cout << scaler_mean[i] << " ";
         std::cout << "\nScaler scale: ";
-        for (int i = 0; i < NFEAT; i++) std::cout << scaler_scale[i] << " ";
+        for (int i = 0; i < NFEAT; ++i) std::cout << scaler_scale[i] << " ";
         std::cout << "\nLatent space mean: ";
-        for (int i = 0; i < NFEAT; i++) std::cout << pca_mean[i] << " ";
+        for (int i = 0; i < NFEAT; ++i) std::cout << pca_mean[i] << " ";
         std::cout << "\nLatent space components (W):\n";
-        for (int i = 0; i < NFEAT; i++) {
-            for (int j = 0; j < NFEAT; j++)
+        for (int i = 0; i < NFEAT; ++i) {
+            for (int j = 0; j < NFEAT; ++j)
                 std::cout << W[i][j] << " ";
             std::cout << "\n";
         }
         if (use_mixing) {
             std::cout << "Mixing matrix:\n";
-            for (int i = 0; i < NFEAT; i++) {
-                for (int j = 0; j < NFEAT; j++)
+            for (int i = 0; i < NFEAT; ++i) {
+                for (int j = 0; j < NFEAT; ++j)
                     std::cout << MIXING[i][j] << " ";
                 std::cout << "\n";
             }
