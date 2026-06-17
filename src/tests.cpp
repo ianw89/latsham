@@ -369,6 +369,57 @@ void test_Halo_LatentModel() {
 
 }
 
+void test_E2E_2P2PModel() {
+    printf("\n=== End to End 2P2P Model TESTS ===\n");
+
+    std::vector<Halo> halos;
+    for (int i = 0; i < 5; i++) {
+        Halo h;
+        h.logmhalo = 13.0 - i * 0.1;
+        h.halfmass_scale = 0.4 - i * 0.01; // Small difference only for this test
+        halos.push_back(h);
+    } 
+
+    ConnectionModel *model = new ConnectionModel_2P2P(); // Use default parameters (TODO stabilize for testing)
+    model->load();
+
+    for (Halo &h : halos) {
+        model->haloModel->forward_transform(h);
+    }
+
+    // Regardless of those halos values, the first 10 halos matched will will be extremal on the target (galaxy) density functions.
+    // Let's test that we get values back that are within the limits of the raw galaxy property density functions
+    // This can fail in these latent space models because of higher order correlations.
+    // The model will make up galaxy ICA property combinations that may not correspond to realistic galaxies.
+    // This is why we re-abundance match the raw galaxy properties unto themselves afterwards.
+
+    // Does everything; now all the halos have all the galaxy properties according to this model
+    model->match(halos); 
+
+    TabulatedDensityFunction mag_r_density = TabulatedDensityFunction(GAL_MAGR_DENSITY);
+    TabulatedDensityFunction g_r_density = TabulatedDensityFunction(GAL_COLOR_GMR_DENSITY);
+    //printf("Mag r density function: min_x=%.10f, max_x=%.10f\n", mag_r_density.getLeftEdge(), mag_r_density.getRightEdge());
+    //printf("G-r color density function: min_x=%.10f, max_x=%.10f\n", g_r_density.getLeftEdge(), g_r_density.getRightEdge());
+
+    // Check that values are within the limits of them.
+    for (Halo &h : halos) {
+        // mag is always backwards of what you think
+        TEST_CASE(h.galaxy.abs_mag_r >= mag_r_density.getRightEdge() && h.galaxy.abs_mag_r <= mag_r_density.getLeftEdge(),
+                  h.galaxy.abs_mag_r,
+                  "Galaxy abs mag r should be within the limits of the density function");
+        TEST_CASE(h.galaxy.color_g_r >= g_r_density.getLeftEdge() && h.galaxy.color_g_r <= g_r_density.getRightEdge(),
+                  h.galaxy.color_g_r,
+                  "Galaxy g-r color should be within the limits of the density function");
+    }
+
+    // Bigger halos got brighter galaxies (lower abs mag r) 
+    for (size_t i = 1; i < halos.size(); i++) {
+        TEST_CASE(halos[i].galaxy.abs_mag_r >= halos[i-1].galaxy.abs_mag_r,
+                  halos[i].galaxy.abs_mag_r,
+                  "Bigger halos should have brighter galaxies (lower abs mag r)");
+    }
+}
+
 int main () {
     test_TabulatedDensityFunction();
     test_AMCDF_HaloICA1();
@@ -379,6 +430,7 @@ int main () {
     test_Halo_LatentModel();
     test_GalaxyMagMatcher();
     test_Gal2PICAMatchers();
+    test_E2E_2P2PModel();
 
     std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;
     std::cout << "All tests passed successfully." << std::endl;
