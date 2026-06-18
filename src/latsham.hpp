@@ -24,6 +24,7 @@
 
 #define SILENT 0
 #define VERBOSE 0
+#define PERF 1
 
 using boost::math::tools::eps_tolerance;
 using boost::math::tools::toms748_solve;
@@ -36,7 +37,7 @@ double midpnt(double (*func)(double), double a, double b, int n);
 // LOGGING
 #define LOG_VERBOSE(...)  if (!SILENT && VERBOSE) fprintf(stderr, __VA_ARGS__)
 #define LOG_INFO(...)  if (!SILENT) fprintf(stderr, __VA_ARGS__)
-#define LOG_PERF(...)  if (!SILENT) fprintf(stderr, __VA_ARGS__)
+#define LOG_PERF(...)  if (!SILENT && PERF) fprintf(stderr, __VA_ARGS__)
 #define LOG_WARN(...)  if (!SILENT) fprintf(stderr, __VA_ARGS__)
 #define LOG_ERROR(...) fprintf(stderr, __VA_ARGS__)
 

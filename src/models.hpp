@@ -72,7 +72,7 @@ struct Halo : Transformable {
     double spin;
     double lat1, lat2;
 
-    // temp property used for ranking
+    // temp properties used for ranking
     double rank;
 
     Galaxy galaxy; // The galaxy that occupies this halo after abundance matching
@@ -113,7 +113,6 @@ void sortByRank(std::vector<Halo>& halos) {
             return a.rank > b.rank; 
         });
 }
-
 
 class GalaxyMagMatcher : public AbundanceMatchingManager {
 public:
@@ -190,8 +189,6 @@ private:
     }
 };
 
-
-
 class Galaxy2P_ICA1Matcher : public AbundanceMatchingManager {
 public:
     static Galaxy2P_ICA1Matcher& get() {
@@ -241,8 +238,8 @@ private:
 class ConnectionModel {
 public:
     virtual void setParamsFromList(std::vector<double> params) = 0;
-    virtual void match(std::vector<Halo>& halos) = 0;
-    virtual void writeMocks(std::vector<Halo>& halos) = 0;
+    virtual bool match(std::vector<Halo>& halos) = 0;
+    virtual bool writeMocks(std::vector<Halo>& halos) = 0;
     virtual void load() = 0;
     
     std::unique_ptr<LatentModel> galaxyModel;
@@ -261,7 +258,7 @@ public:
         scatter = params[0];
     }
 
-    void match(std::vector<Halo>& halos) override {
+    bool match(std::vector<Halo>& halos) override {
 
         // Lognormal scatter in luminosity at fixed halo mass
         std::random_device rd;
@@ -273,7 +270,6 @@ public:
         for (Halo &h : halos) {
             h.rank = h.logmhalo + gaussian_dist(gen);
         }
-
         sortByRank(halos);
 
         // Now abundance match to galaxy r band abs magnitude using
@@ -282,9 +278,11 @@ public:
             density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
             h.galaxy.abs_mag_r = GalaxyMagMatcher::get().match(density);
         }
+
+        return true;
     }    
 
-    void writeMocks(std::vector<Halo>& halos) override {
+    bool writeMocks(std::vector<Halo>& halos) override {
         // Write files out in the format that corrfun expects for wp calculation.
         std::string out_filename = "/mount/sirocco1/imw2293/GROUP_CAT/OUTPUT/LATSHAM/mock_M20.dat";
         std::ofstream outputFile(out_filename);
@@ -296,6 +294,8 @@ public:
 
             outputFile << halos[i].x << " " << halos[i].y << " " << halos[i].z << "\n";
         }
+
+        return true;
         // No satellites for this study; we will compare to centrals-only clustering measurements.    
     }
 };
@@ -309,11 +309,15 @@ public:
         loaded = true;
     }
 
-    // Best:  [0.88693407 3.33345685]
-    double p1 = cos(0.88693407);
-    double p2 = sin(0.88693407);
-    double p3 = cos(3.33345685);
-    double p4 = sin(3.33345685);
+    // Best:  [0.88693407 3.33345685] 
+    //3.98728008 5.84725974
+    // [-0.98, 0.198, 0.824, -0.567]
+    // -0.9802, 0.824
+    // [3.9827825  0.32284589]
+    double p1 = cos(3.9827825);
+    double p2 = sin(3.9827825);
+    double p3 = cos(0.32284589);
+    double p4 = sin(0.32284589);
     
     void setParamsFromList(std::vector<double> params) {
         if (params.size() != 4) {
@@ -327,8 +331,13 @@ public:
         LOG_INFO("Set model params: p1=%.3f, p2=%.3f, p3=%.3f, p4=%.3f\n", p1, p2, p3, p4);
     }
 
-    void match(std::vector<Halo>& halos) override {
+    bool match(std::vector<Halo>& halos) override {
         if (!loaded) load();
+
+        // Perf note: I tried storing a lookup of density values, but somehow it was slower than recomputing it.
+        // No gains from parallelizing the match(density) call.
+        // The sorts take ~250ms each on howdy
+        // Not much to improve here. Replacing mock writing with direct call to corrfunc from code is most important.
 
         //#pragma omp parallel for
         for (size_t i = 0; i < halos.size(); ++i) {
@@ -367,8 +376,9 @@ public:
         }*/
 
         // Re-abundance properties match onto itself to ensure original propety distributions are respected
-        for (Halo &h : halos) {
-            h.rank = h.galaxy.getProperty(0); // re-apply the same latent property values to force them to be self-consistent with the mag/color distribution after the inverse transform. This is a hack to deal with the higher-order residual correlation issue.
+        //#pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            halos[i].rank = halos[i].galaxy.getProperty(0); // re-apply the same latent property values to force them to be self-consistent with the mag/color distribution after the inverse transform. This is a hack to deal with the higher-order residual correlation issue.
         }
         sortByRank(halos);
         density = 0.0;
@@ -377,8 +387,9 @@ public:
             h.galaxy.setProperty(0, GalaxyMagMatcher::get().match(density));
         }
         
-        for (Halo &h : halos) {
-            h.rank = h.galaxy.getProperty(1); // re-apply the same latent property values to force them to be self-consistent with the mag/color distribution after the inverse transform. This is a hack to deal with the higher-order residual correlation issue.
+        //#pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            halos[i].rank = halos[i].galaxy.getProperty(1); // re-apply the same latent property values to force them to be self-consistent with the mag/color distribution after the inverse transform. This is a hack to deal with the higher-order residual correlation issue.
         }
         sortByRank(halos);
         density = 0.0;
@@ -386,17 +397,19 @@ public:
             density += HALO_DENSITY_INCREMENT; 
             h.galaxy.setProperty(1, GalaxyColorGMRMatcher::get().match(density));
         }
-        
+
+        return true;
     }    
 
-    void writeMocks(std::vector<Halo>& halos) override {
+    bool writeMocks(std::vector<Halo>& halos) override {
         // Write files out in the format that corrfun expects for wp calculation.
         std::string out_basename = "/mount/sirocco1/imw2293/GROUP_CAT/OUTPUT/LATSHAM/mock_%s_M%d.dat";
 
         std::vector<int> magbins = {-17, -18, -19, -20, -21, -22};
         std::vector<std::string> colors = {"red", "blue"};
 
-        #pragma omp parallel for collapse(2)
+        int successes = 0;
+        #pragma omp parallel for collapse(2) reduction(+:successes)
         for (int i = 0; i < magbins.size(); ++i) {
             for (int j = 0; j < colors.size(); ++j) {
                 auto magbin = magbins[i];
@@ -405,15 +418,17 @@ public:
                 out_filename = out_filename.replace(out_filename.find("%s"), 2, color);
                 out_filename = out_filename.replace(out_filename.find("%d"), 2, std::to_string(abs(magbin)));
                 LOG_VERBOSE("Writing mock for magbin %d, color %s to %s\n", magbin, color.c_str(), out_filename.c_str());
-                writeMockForBin(halos, magbin, color, out_filename);
+                successes += writeMockForBin(halos, magbin, color, out_filename);
             }
         }
+        LOG_INFO("Successfully wrote %d mocks out of %d\n", successes, (int)(magbins.size() * colors.size()));
+        return successes == (magbins.size() * colors.size());
     }
 
 private:
     bool loaded = false;
 
-    void writeMockForBin(const std::vector<Halo>& halos, int magbin, const std::string& color, const std::string& out_filename) {
+    bool writeMockForBin(const std::vector<Halo>& halos, int magbin, const std::string& color, const std::string& out_filename) {
         std::ofstream outputFile(out_filename);
         double color_cut = 0.76; 
         int count = 0;
@@ -432,5 +447,6 @@ private:
             outputFile << h.x << " " << h.y << " " << h.z << "\n";
         }
         LOG_VERBOSE("Wrote %d galaxies for magbin %d, color %s\n", count, magbin, color.c_str());
+        return count > 0;
     }
 };

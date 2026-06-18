@@ -48,7 +48,7 @@ public:
     void endAndLog(const std::string& message) {
         auto now = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-        LOG_INFO("%s: %lld ms\n", message.c_str(), duration);
+        LOG_PERF("%s: %lld ms\n", message.c_str(), duration);
     }
 private:
     std::chrono::high_resolution_clock::time_point start;
@@ -171,10 +171,10 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state) {
 }
 static struct argp argp = { options, parse_opt, args_doc, doc };
 
-void send_completed_msg() {
+void send_completed_msg(bool success) {
     if (MSG_PIPE != NULL) {
       //LOG_INFO("Group finding completed, sending message and awaiting next request...\n");
-      uint8_t resp_msg_type = MSG_COMPLETED;
+      uint8_t resp_msg_type = success ? MSG_COMPLETED : MSG_ABORTED;
       uint8_t resp_data_type = TYPE_FLOAT;
       uint32_t resp_count = 0;
 
@@ -293,6 +293,7 @@ int main(int argc, char **argv) {
     std::vector<double> params;
     timer.begin();
     while (MSG_PIPE != NULL) {
+        bool success = true;
 
         try {
             params = await_request();
@@ -304,19 +305,19 @@ int main(int argc, char **argv) {
         }
 
         timer.begin();
-        model->match(halos);
+        success &= model->match(halos);
         timer.endAndLog("Time to match with new parameters");
 
         timer.begin();
-        model->writeMocks(halos);
+        success &= model->writeMocks(halos);
         timer.endAndLog("Time to write mocks with new parameters");
 
         timer.begin();
-        send_completed_msg();
+        send_completed_msg(success);
     }
 
     // Write everything 
-    writeFullMock(halos);
+    //writeFullMock(halos);
 
     return 0;
 }
