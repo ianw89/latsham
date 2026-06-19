@@ -376,12 +376,15 @@ void test_E2E_2P2PModel() {
     for (int i = 0; i < 5; i++) {
         Halo h;
         h.logmhalo = 13.0 - i * 0.1;
-        h.halfmass_scale = 0.4 - i * 0.01; // Small difference only for this test
+        h.halfmass_scale = 0.4; // fix
         halos.push_back(h);
     } 
 
-    ConnectionModel *model = new ConnectionModel_2P2P(); // Use default parameters (TODO stabilize for testing)
+    ConnectionModel *model = new ConnectionModel_2P2P(); 
     model->load();
+    model->setParamsFromList( // Identity transform in latent spaces
+        {1.0, 0.0, 
+         0.0, 1.0}); 
 
     for (Halo &h : halos) {
         model->haloModel->forward_transform(h);

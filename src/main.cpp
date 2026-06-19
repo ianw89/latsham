@@ -319,5 +319,6 @@ int main(int argc, char **argv) {
     // Write everything 
     //writeFullMock(halos);
 
+    LOG_INFO("Latsham finished successfully, exiting.\n");
     return 0;
 }

@@ -12,8 +12,7 @@
 #include "latsham.hpp"
 
 // This file is already cut to central halos only; no subhalos. That's the 'C' in the name.
-// It is also cut to M200b > 8E9 Msun
-const std::string HALO_CATALOG = "/mount/sirocco1/imw2293/GROUP_CAT/DATA/POPMOCK/smdpl_z0.19717.M8E9.C.h5";
+const std::string HALO_CATALOG = "/mount/sirocco1/imw2293/GROUP_CAT/DATA/POPMOCK/smdpl_z0.19717.M1E11.C.h5";
 double constexpr BOX_SIZE = 400.0; // Mpc/h, from the simulation specs
 double constexpr SIM_VOLUME = BOX_SIZE * BOX_SIZE * BOX_SIZE; // (Mpc/h)^3
 double constexpr HALO_DENSITY_INCREMENT = 1.0 / SIM_VOLUME; 
@@ -309,16 +308,11 @@ public:
         loaded = true;
     }
 
-    // Best:  [0.88693407 3.33345685] 
-    //3.98728008 5.84725974
-    // [-0.98, 0.198, 0.824, -0.567]
-    // -0.9802, 0.824
-    // [3.9827825  0.32284589]
-    double p1 = cos(3.9827825);
-    double p2 = sin(3.9827825);
-    double p3 = cos(0.32284589);
-    double p4 = sin(0.32284589);
-    
+    double p1 = 1.0;
+    double p2 = 0.0;
+    double p3 = 0.0;
+    double p4 = 1.0;
+
     void setParamsFromList(std::vector<double> params) {
         if (params.size() != 4) {
             LOG_ERROR("Expected 4 parameters for Model_2P2P, got %zu\n", params.size());
@@ -368,17 +362,25 @@ public:
             this->galaxyModel->inverse_transform(halos[i].galaxy);
         }
 
-        // Print results for the first 5 halos
-        /*for (int i = 0; i < 5 && i < halos.size(); ++i) {
-            const Halo& h = halos[i];
-            LOG_INFO("Halo %d: logmhalo=%.3f, age=%.3f, color=%.3f, abs_mag_r=%.3f\n", i, 
-                h.logmhalo, h.halfmass_scale, h.galaxy.color_g_r, h.galaxy.abs_mag_r);
-        }*/
-
         // Re-abundance properties match onto itself to ensure original propety distributions are respected
+        // This is a trick to deal with the higher-order residual correlations in the latent space,
+        // which can result in unrealistic property values.
+
         //#pragma omp parallel for
         for (size_t i = 0; i < halos.size(); ++i) {
-            halos[i].rank = halos[i].galaxy.getProperty(0); // re-apply the same latent property values to force them to be self-consistent with the mag/color distribution after the inverse transform. This is a hack to deal with the higher-order residual correlation issue.
+            halos[i].rank = halos[i].galaxy.getProperty(1); 
+        }
+        sortByRank(halos);
+        density = 0.0;
+        for (Halo &h : halos) {
+            density += HALO_DENSITY_INCREMENT; 
+            h.galaxy.setProperty(1, GalaxyColorGMRMatcher::get().match(density));
+        }
+
+        //#pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            // Minus sign for magnitudes!!
+            halos[i].rank = - halos[i].galaxy.getProperty(0); 
         }
         sortByRank(halos);
         density = 0.0;
@@ -386,16 +388,11 @@ public:
             density += HALO_DENSITY_INCREMENT; 
             h.galaxy.setProperty(0, GalaxyMagMatcher::get().match(density));
         }
-        
-        //#pragma omp parallel for
-        for (size_t i = 0; i < halos.size(); ++i) {
-            halos[i].rank = halos[i].galaxy.getProperty(1); // re-apply the same latent property values to force them to be self-consistent with the mag/color distribution after the inverse transform. This is a hack to deal with the higher-order residual correlation issue.
-        }
-        sortByRank(halos);
-        density = 0.0;
-        for (Halo &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.setProperty(1, GalaxyColorGMRMatcher::get().match(density));
+
+        for (size_t i = 0; i < 5 && i < halos.size(); ++i) {
+            const Halo& h = halos[i];
+            LOG_INFO("Halo %d: logmhalo=%.3f, age=%.3f, color=%.3f, abs_mag_r=%.3f\n", i, 
+                h.logmhalo, h.halfmass_scale, h.galaxy.color_g_r, h.galaxy.abs_mag_r);
         }
 
         return true;
