@@ -263,7 +263,11 @@ int main(int argc, char **argv) {
 
     if (!model_params.empty()) {
         // Put other models here when ready
-        if (model_params.size() == 4) {
+        if (model_params.size() == 8) {
+            model = new ConnectionModel_2P4P();
+            model->setParamsFromList(model_params);
+            model->load();
+        } else if (model_params.size() == 4) {
             model = new ConnectionModel_2P2P();
             model->setParamsFromList(model_params);
             model->load();
@@ -272,7 +276,7 @@ int main(int argc, char **argv) {
         }
     } else {
         // Default model
-        model = new ConnectionModel_2P2P();
+        model = new ConnectionModel_2P4P();
         model->load();
     }
 
