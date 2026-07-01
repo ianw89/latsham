@@ -9,6 +9,11 @@
 #include <string>
 #include <stdexcept>
 #include <random>
+#include <regex>
+#include <set>
+#include <map>
+#include <filesystem>
+#include <iostream>
 #include "latsham.hpp"
 
 // This file is already cut to central halos only; no subhalos. That's the 'C' in the name.
@@ -462,6 +467,65 @@ public:
     void load() {
         this->galaxyModel = std::make_unique<LatentModel>(GAL_2P_LATENT_MODEL_TEXT_FILE);
         this->haloModel = std::make_unique<LatentModel>(HALO_4P_LATENT_MODEL_TEXT_FILE);
+
+        const std::string data_folder = "/mount/sirocco1/imw2293/GROUP_CAT/latsham/data/dr2_wp_1/";
+        const std::regex pattern(R"(wp_mag([\d\.-]+to[\d\.-]+)_gmr([\d\.-]+to[\d\.-]+)\.dat)");
+        std::set<double, std::greater<double>> magbins_set;
+        std::map<std::string, std::set<double>> gmrbins_set;
+
+        for (const auto &entry : std::filesystem::directory_iterator(data_folder)) {
+            if (!entry.is_regular_file())
+                continue;
+
+            std::string fname = entry.path().filename().string();
+
+            std::smatch match;
+            if (!std::regex_match(fname, match, pattern))
+                continue;
+
+            std::string mag_range = match[1];
+            std::string gr_range  = match[2];
+
+            size_t pos1 = mag_range.find("to");
+            double mag_min = std::stod(mag_range.substr(0, pos1));
+            double mag_max = std::stod(mag_range.substr(pos1 + 2));
+            magbins_set.insert(mag_min);
+            magbins_set.insert(mag_max);
+
+            size_t pos2 = gr_range.find("to");
+            double gr_min = std::stod(gr_range.substr(0, pos2));
+            double gr_max = std::stod(gr_range.substr(pos2 + 2));
+            gmrbins_set[mag_range].insert(gr_min);
+            gmrbins_set[mag_range].insert(gr_max);
+        }
+
+        if (magbins_set.empty()) {
+            LOG_ERROR("No magnitude bins found in data folder %s\n", data_folder.c_str());
+            throw std::runtime_error("No magnitude bins found");
+        }
+
+        magbins.assign(magbins_set.begin(), magbins_set.end());
+
+        gmrbins.clear();
+
+        for (auto it = gmrbins_set.begin(); it != gmrbins_set.end(); ++it)
+        {
+            gmrbins.emplace_back(it->second.begin(), it->second.end());
+        }
+
+        total_bins = 0;
+        for (size_t i = 0; i < magbins.size() - 1; ++i) {
+            LOG_VERBOSE("Mag bin %zu: [%.2f, %.2f]\n", i, magbins[i], magbins[i + 1]);
+            if (i < gmrbins.size()) {
+                LOG_VERBOSE("  GMR bins: ");
+                for (double gmr : gmrbins[i]) {
+                    LOG_VERBOSE("%.3f ", gmr);
+                }
+                LOG_VERBOSE("\n");
+                total_bins += gmrbins[i].size() - 1; // number of bins is number of edges - 1
+            }
+        }
+
         loaded = true;
     }
 
@@ -569,50 +633,53 @@ public:
 
     bool writeMocks(std::vector<Halo>& halos) override {
         // Write files out in the format that corrfun expects for wp calculation.
-        std::string out_basename = "/mount/sirocco1/imw2293/GROUP_CAT/OUTPUT/LATSHAM/mock_%s_M%d.dat";
 
-        std::vector<int> magbins = {-17, -18, -19, -20, -21, -22};
-        std::vector<std::string> colors = {"red", "blue"};
 
         int successes = 0;
-        #pragma omp parallel for collapse(2) reduction(+:successes)
-        for (int i = 0; i < magbins.size(); ++i) {
-            for (int j = 0; j < colors.size(); ++j) {
-                auto magbin = magbins[i];
-                auto color = colors[j];
-                std::string out_filename = out_basename;
-                out_filename = out_filename.replace(out_filename.find("%s"), 2, color);
-                out_filename = out_filename.replace(out_filename.find("%d"), 2, std::to_string(abs(magbin)));
-                LOG_VERBOSE("Writing mock for magbin %d, color %s to %s\n", magbin, color.c_str(), out_filename.c_str());
-                successes += writeMockForBin(halos, magbin, color, out_filename);
+
+        //#pragma omp parallel for collapse(2) reduction(+:successes)
+        #pragma omp parallel for reduction(+:successes) // Only parallizes outer loop, but 10 at a time is fine...
+        for (size_t i = 0; i < magbins.size() - 1; ++i) {
+            for (size_t j = 0; j < gmrbins[i].size() - 1; ++j) {
+                successes += writeMockForBin(halos, i, j);
             }
         }
-        LOG_INFO("Successfully wrote %d mocks out of %d\n", successes, (int)(magbins.size() * colors.size()));
-        return successes == (magbins.size() * colors.size());
+        
+        LOG_INFO("Successfully wrote %d mocks out of %zu\n", successes, total_bins);
+        return successes == total_bins;
     }
 
 private:
     bool loaded = false;
+    std::vector<double> magbins;
+    std::vector<std::vector<double>> gmrbins;
+    size_t total_bins;
 
-    bool writeMockForBin(const std::vector<Halo>& halos, int magbin, const std::string& color, const std::string& out_filename) {
-        std::ofstream outputFile(out_filename);
-        double color_cut = 0.76; 
+    bool writeMockForBin(const std::vector<Halo>& halos, size_t i, size_t j) {
+        //double color_cut = 0.76; 
         int count = 0;
 
-        // No satellites for this study; we will compare to centrals-only clustering measurements.    
+        auto mag_left = magbins[i];
+        auto mag_right = magbins[i + 1];
+        auto gmr_left = gmrbins[i][j];
+        auto gmr_right = gmrbins[i][j + 1];
+        std::ostringstream oss;
+        oss << "/mount/sirocco1/imw2293/GROUP_CAT/OUTPUT/LATSHAM/mock_"
+        << std::fixed << std::setprecision(4) << mag_left << "_" << mag_right
+        << "_" << gmr_left << "_" << gmr_right << ".dat";
+        std::ofstream outputFile(oss.str());
 
+        // No satellites for this study; we will compare to centrals-only clustering measurements
         for (const Halo& h : halos) {
-            if (h.galaxy.abs_mag_r < (magbin - 1) || h.galaxy.abs_mag_r > magbin)
+            if (h.galaxy.abs_mag_r > mag_left || h.galaxy.abs_mag_r < mag_right) // They go like -16, -17, -18...
                 continue;
-            if (color == "red" && h.galaxy.color_g_r < color_cut)
-                continue;
-            if (color == "blue" && h.galaxy.color_g_r >= color_cut)
+            if (h.galaxy.color_g_r < gmr_left || h.galaxy.color_g_r > gmr_right)
                 continue;
 
             ++count;
-            outputFile << h.x << " " << h.y << " " << h.z << "\n";
+            outputFile << std::setprecision(8) << h.x << " " << h.y << " " << h.z << "\n";
         }
-        LOG_VERBOSE("Wrote %d galaxies for magbin %d, color %s\n", count, magbin, color.c_str());
+        LOG_VERBOSE("Mock building: wrote %d galaxies for magbin [%.2f, %.2f], gmrbin [%.3f, %.3f]\n", count, mag_left, mag_right, gmr_left, gmr_right);
         return count > 0;
     }
 };

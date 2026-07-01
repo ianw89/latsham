@@ -191,7 +191,7 @@ void writeFullMock(std::vector<Halo>& halos) {
     std::ofstream outputFile(out_filename);
     for (const Halo& h : halos) {
         outputFile << h.x << " " << h.y << " " << h.z 
-        << " " << h.logmhalo << " " << h.halfmass_scale << " " << h.galaxy.abs_mag_r << " " << h.galaxy.color_g_r << "\n";
+        << " " << h.logmhalo << " " << h.halfmass_scale << " " << h.spin << " " << h.c << " " << h.galaxy.abs_mag_r << " " << h.galaxy.color_g_r << "\n";
 
     }
     LOG_VERBOSE("Wrote full mock to %s\n", out_filename.c_str());
@@ -321,7 +321,7 @@ int main(int argc, char **argv) {
     }
 
     // Write everything 
-    //writeFullMock(halos);
+    writeFullMock(halos);
 
     LOG_INFO("Latsham finished successfully, exiting.\n");
     return 0;

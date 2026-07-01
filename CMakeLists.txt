@@ -28,11 +28,11 @@ target_include_directories(latsham PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(latsham PRIVATE HighFive GSL::gsl GSL::gslcblas OpenMP::OpenMP_CXX)
+target_link_libraries(latsham PRIVATE HighFive GSL::gsl GSL::gslcblas OpenMP::OpenMP_CXX stdc++fs)
 
 add_executable(tests src/tests.cpp)
 target_include_directories(tests PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(tests PRIVATE HighFive GSL::gsl GSL::gslcblas OpenMP::OpenMP_CXX)
+target_link_libraries(tests PRIVATE HighFive GSL::gsl GSL::gslcblas OpenMP::OpenMP_CXX stdc++fs)
