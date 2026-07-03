@@ -397,117 +397,81 @@ class AbundanceMatchingManager {
 // Supports invertable linear PCA/ICA like models with whitening.
 class LatentModel {
 public:
+    LatentModel(std::string model_file) : model_file(model_file) {}
 
-    LatentModel(std::string model_file) {
-        std::ifstream fp(model_file);
-        if (!fp) { fprintf(stderr, "Could not open %s\n", model_file); exit(1); }
-        std::string line;
-        int block = 0;
-        int j = 0;
-        while (std::getline(fp, line)) {
-            // Look for # n_features: <int>
-            if (line.find("# n_features:") != std::string::npos) {
-                std::istringstream ss(line.substr(13));
-                ss >> NFEAT;
-                if (NFEAT < 2) {
-                    LOG_ERROR("Error: n_features must be at least 2, but got %d\n", NFEAT);
-                    exit(1);
-                }
-                scaler_mean.resize(NFEAT);
-                scaler_scale.resize(NFEAT);
-                pca_mean.resize(NFEAT);
-                W.resize(NFEAT);
-                for (int i = 0; i < NFEAT; ++i) W[i].resize(NFEAT);
-                MIXING.resize(NFEAT);
-                for (int i = 0; i < NFEAT; ++i) MIXING[i].resize(NFEAT);
-                continue;
-            }
-
-            // Ignore other comments
-            if (line.empty() || line[0] == '#') continue;
-
-            // Ensure NFEAT set by now
-            if (NFEAT <= 1) {
-                LOG_ERROR("Error: n_features must be specified in the model file before data blocks.\n");
-                exit(1);
-            }
-
-            std::istringstream ss(line);
-            switch (block) {
-                case 0: for (int i = 0; i < NFEAT; i++) ss >> scaler_mean[i]; break;
-                case 1: for (int i = 0; i < NFEAT; ++i) ss >> scaler_scale[i]; break;
-                case 2: for (int i = 0; i < NFEAT; ++i) ss >> pca_mean[i]; break;
-                case 3: for (int i = 0; i < NFEAT; ++i) ss >> W[j][i]; ++j; break;
-                // If there is a mixing matrix for the inverse transform, we need to read that in too.
-                case 4: for (int i = 0; i < NFEAT; ++i) ss >> MIXING[j][i]; ++j; use_mixing=true; break;
-            }
-            if (j == NFEAT) 
-                j = 0;
-            if (j == 0)
-                ++block;
-        }
-        LOG_VERBOSE("Loaded halo latent model with NFEAT = %d, use_mixing = %d\n", NFEAT, use_mixing);
-        //print_model();
-    }
-
-    // Forward transform: original feature space -> Latent coords
+    // Forward: IC[i] = sum_j (x[j] - mu[j]) * A[j][i]
     void forward_transform(Transformable &obj) {
-        double x[NFEAT];
-        double xs[NFEAT];
-        for (int j = 0; j < NFEAT; ++j)
-            xs[j] = (obj.getProperty(j) - scaler_mean[j]) / scaler_scale[j] - pca_mean[j];
+        if (!loaded) load();
         for (int i = 0; i < NFEAT; ++i) {
-            x[i] = 0;
+            double ic = 0;
             for (int j = 0; j < NFEAT; ++j)
-                x[i] += W[i][j] * xs[j];
-            obj.setLatentProperty(i, x[i]);
+                ic += (obj.getProperty(j) - mu[j]) * A[j][i];
+            obj.setLatentProperty(i, ic);
         }
     }
 
-    // Inverse transform: Latent coords -> original feature space
+    // Inverse: x[j] = sum_i IC[i] * B[i][j] + mu[j]
     void inverse_transform(Transformable &obj) {
-        double xs[NFEAT] = {0};
-        for (int j = 0; j < NFEAT; ++j)
-            for (int i = 0; i < NFEAT; ++i) {
-                if (use_mixing)
-                    xs[j] += MIXING[j][i] * obj.getLatentProperty(i);
-                else
-                    xs[j] += W[i][j] * obj.getLatentProperty(i); 
-            }
-
-        for (int i = 0; i < NFEAT; ++i)
-            obj.setProperty(i, (xs[i] + pca_mean[i]) * scaler_scale[i] + scaler_mean[i]);
+        if (!loaded) load();
+        for (int j = 0; j < NFEAT; ++j) {
+            double x = mu[j];
+            for (int i = 0; i < NFEAT; ++i)
+                x += obj.getLatentProperty(i) * B[i][j];
+            obj.setProperty(j, x);
+        }
     }
 
     void print_model() {
-        std::cout << "Scaler mean: ";
-        for (int i = 0; i < NFEAT; ++i) std::cout << scaler_mean[i] << " ";
-        std::cout << "\nScaler scale: ";
-        for (int i = 0; i < NFEAT; ++i) std::cout << scaler_scale[i] << " ";
-        std::cout << "\nLatent space mean: ";
-        for (int i = 0; i < NFEAT; ++i) std::cout << pca_mean[i] << " ";
-        std::cout << "\nLatent space components (W):\n";
+        if (!loaded) load();
+        std::cout << "mean:";
+        for (int i = 0; i < NFEAT; ++i) std::cout << " " << mu[i];
+        std::cout << "\nforward_matrix (A):\n";
         for (int i = 0; i < NFEAT; ++i) {
-            for (int j = 0; j < NFEAT; ++j)
-                std::cout << W[i][j] << " ";
+            for (int j = 0; j < NFEAT; ++j) std::cout << A[i][j] << " ";
             std::cout << "\n";
         }
-        if (use_mixing) {
-            std::cout << "Mixing matrix:\n";
-            for (int i = 0; i < NFEAT; ++i) {
-                for (int j = 0; j < NFEAT; ++j)
-                    std::cout << MIXING[i][j] << " ";
-                std::cout << "\n";
-            }
+        std::cout << "inverse_matrix (B):\n";
+        for (int i = 0; i < NFEAT; ++i) {
+            for (int j = 0; j < NFEAT; ++j) std::cout << B[i][j] << " ";
+            std::cout << "\n";  
         }
     }
 
 private:
+    std::string model_file;
     int NFEAT = 0;
-    std::vector<double> scaler_mean;
-    std::vector<double> scaler_scale;
-    std::vector<double> pca_mean;
-    std::vector<std::vector<double>> W; // W[component][feature]
-    std::vector<std::vector<double>> MIXING; // mixing_[feature][component]
-    bool use_mixing = false; 
+    std::vector<double> mu;
+    std::vector<std::vector<double>> A; // A[feature][component]
+    std::vector<std::vector<double>> B; // B[component][feature]
+    bool loaded = false;
+
+    void load() {
+        std::ifstream fp(model_file);
+        if (!fp) { fprintf(stderr, "Could not open %s\n", model_file.c_str()); exit(1); }
+        std::string line;
+        int block = 0, j = 0;
+        while (std::getline(fp, line)) {
+            if (line.find("# n_features:") != std::string::npos) {
+                std::istringstream ss(line.substr(13));
+                ss >> NFEAT;
+                mu.resize(NFEAT);
+                A.assign(NFEAT, std::vector<double>(NFEAT));
+                B.assign(NFEAT, std::vector<double>(NFEAT));
+                continue;
+            }
+            if (line.empty() || line[0] == '#') continue;
+            if (NFEAT <= 0) { LOG_ERROR("n_features must appear before data blocks\n"); exit(1); }
+            std::istringstream ss(line);
+            switch (block) {
+                case 0: for (int i = 0; i < NFEAT; ++i) ss >> mu[i]; break;
+                case 1: for (int i = 0; i < NFEAT; ++i) ss >> A[j][i]; ++j; break;
+                case 2: for (int i = 0; i < NFEAT; ++i) ss >> B[j][i]; ++j; break;
+            }
+            if (j == NFEAT) j = 0;
+            if (j == 0) ++block;
+        }
+        loaded = true;
+        LOG_VERBOSE("Loaded latent model from %s, NFEAT=%d\n", model_file.c_str(), NFEAT);
+    }
 };
+

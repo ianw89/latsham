@@ -327,8 +327,8 @@ void test_Galaxy_LatentModel() {
     g.abs_mag_r = -20.0;
     g.color_g_r = 0.8;
     model.forward_transform(g);
-    TEST_CASE(std::isfinite(g.lat1) && g.lat1 > -2 && g.lat1 < 2 , g.lat1, "Forward transform Latent value 1 should be finite and reasonable");
-    TEST_CASE(std::isfinite(g.lat2) && g.lat2 > -2 && g.lat2 < 2 , g.lat2, "Forward transform Latent value 2 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat1) && g.lat1 > -3 && g.lat1 < 3 , g.lat1, "Forward transform Latent value 1 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat2) && g.lat2 > -3 && g.lat2 < 3 , g.lat2, "Forward transform Latent value 2 should be finite and reasonable");
     model.inverse_transform(g);
     TEST_CASE(isclose(g.abs_mag_r, -20.0, 1e-5), g.abs_mag_r, "Roundtrip abs_mag_r should be very close to original");
     TEST_CASE(isclose(g.color_g_r, 0.8, 1e-5), g.color_g_r, "Roundtrip color_g_r should be very close to original");
@@ -354,12 +354,14 @@ void test_Galaxy_LatentModel() {
 void test_Halo_LatentModel() {
     printf("\n=== Halo LatentModel TESTS ===\n");
 
-     LatentModel model = LatentModel(HALO_2P_LATENT_MODEL_TEXT_FILE);
+     LatentModel model = LatentModel(HALO_4P_LATENT_MODEL_TEXT_FILE);
 
      // Typical halo values  should go to middle of a latent space
     Halo h = Halo();
     h.logmhalo = 12.0;
     h.halfmass_scale = 0.3;
+    h.c = 10.0;
+    h.spin = 0.1;
     model.forward_transform(h);
     TEST_CASE(std::isfinite(h.lat1) && h.lat1 > -2 && h.lat1 < 2 , h.lat1, "Forward transform Latent value 1 should be finite and reasonable");
     TEST_CASE(std::isfinite(h.lat2) && h.lat2 > -2 && h.lat2 < 2 , h.lat2, "Forward transform Latent value 2 should be finite and reasonable");

@@ -530,14 +530,22 @@ public:
     }
 
     // Initial guess from loadings for LOGMHALO and AGE
-    double g1_h1 = 0.999;
+    /*double g1_h1 = 0.999;
     double g1_h2 = -0.137;
     double g1_h3 = 0.26;
     double g1_h4 = -0.008;
     double g2_h1 = -0.111;
     double g2_h2 = 0.422;
     double g2_h3 = 1.183;
-    double g2_h4 = -0.168;
+    double g2_h4 = -0.168;*/
+    double g1_h1 = 0.8;
+    double g1_h2 = 0.05;
+    double g1_h3 = 0.15;
+    double g1_h4 = 0.0;
+    double g2_h1 = 0.0;
+    double g2_h2 = 0.2;
+    double g2_h3 = 0.8;
+    double g2_h4 = 0.0;
 
     void setParamsFromList(std::vector<double> params) {
         if (params.size() != 8) {
@@ -633,8 +641,6 @@ public:
 
     bool writeMocks(std::vector<Halo>& halos) override {
         // Write files out in the format that corrfun expects for wp calculation.
-
-
         int successes = 0;
 
         //#pragma omp parallel for collapse(2) reduction(+:successes)
