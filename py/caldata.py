@@ -1,133 +1,92 @@
+
 import numpy as np
-import sys
-from pyutils import *
-from dataloc import *
-from footprintmanager import FootprintManager
 import re 
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+import subprocess
+import os
 
-def read_wp_file(fname):
-    data = np.loadtxt(fname, skiprows=0, dtype='float')
-    wp = data[:,1]
-    wp_err = data[:,2]
-    radius = data[:,0]
-    return wp,wp_err,radius
-
-
-class CalData:
+class BiasData:
     """
-    Class to specify the calibration data for the a galaxy halo connection model.
+    Data and utilities for projected clustering bias measurements.
+
+    Built from a .npy numpy array file that should contain data, 1 row per sample, with the following fields:
+    1. magbin_fainter - fainter bound of the magnitude bin
+    2. magbin_brighter - brighter bound of the magnitude bin
+    3. magbin_mean - mean magnitude of the sample
+    4. quiescent - bool indicating if the sample is quiescent or false for star-forming
+    5. third_property_name - optional third property name (nan if not applicable)
+    6. third_propety_lower - optional lower bound of the third property (nan if not applicable)
+    7. third_propety_upper - optional upper bound of the third property (nan if not applicable)
+    8. third_property_mean - optional mean value of the sample for the third property (nan if not applicable)
+    9. b - measured overall bias for the magnitude bin
+    10. b_err_low - lower error bound for the measured bias
+    11. b_err_high - upper error bound for the measured bias
+    12. b_p - measured property bias
+    13. b_p_err_low - lower error bound for the measured property bias
+    14. b_p_err_high - upper error bound for the measured property bias
+    15. b_m - magnitude bias used in calculating b_p from b
     """
-    def __init__(self, paramsfolder, magbins: np.ndarray, gmrbins: np.ndarray, magcut: float, fsky: float):
-        self.paramsfolder = paramsfolder
-        self.rpbinsfile = os.path.join(self.paramsfolder, 'wp_rbins.dat')
-        self.magbins = magbins # absolute magnitude bin definitions (edges)
-        self.gmrbins = gmrbins # g-r color bin definitions (edges)
 
-        if self.magbins is None:
-            self.set_bins_from_folder()
-
-        self.magcut = magcut # apparent magnitude cut to use when calculating the volumes. Negelct .04 difference for N vs S
-        self.zmaxes = np.array([get_max_observable_z(m, self.magcut) for m in self.magbins[:-1]])
-        self.measurement_volumes = np.array([get_volume_at_z(z, fsky) for z in self.zmaxes])
-        self.bincount = len(self.magbins) - 1
-
-        self._wp_red_cache = {}
-        self._wp_blue_cache = {}
-        self._wp_all_cache = {}
-
-    def set_bins_from_folder(self):
-        # Auto read files from folder. Like: wp_mag-22.6473to-21.9413_gmr0.9778to1.0755.data
-        filename_pattern = re.compile(
-            r"wp"
-            r"_mag(?P<mag_range>[\d\.-]+to[\d\.-]+)"  #  magnitude range, needs to handle negative sign too
-            r"_gmr(?P<gr_range>[\d\.-]+to[\d\.-]+)"  #  g-r range
-            r"\.dat$"
-        )
-
-        # Read all files in the folder and extract magbins and gmrbins
-        magbins_set = set()
-        gmrbins_set = {} # Dictionary of sets for each magbin. Key is like '-22.6473to-21.9413'
-        for fname in os.listdir(self.paramsfolder):
-            match = filename_pattern.match(fname)
-            if match:
-                mag_range = match.group("mag_range")
-                gr_range = match.group("gr_range")
-
-                if mag_range:
-                    mag_min, mag_max = map(float, mag_range.split("to"))
-                    magbins_set.add(mag_min)
-                    magbins_set.add(mag_max)
-
-                if gr_range:
-                    gr_min, gr_max = map(float, gr_range.split("to"))
-                    if mag_range not in gmrbins_set:
-                        gmrbins_set[mag_range] = set()
-                    gmrbins_set[mag_range].add(gr_min)
-                    gmrbins_set[mag_range].add(gr_max)
-
-        # Sort and convert to numpy arrays
-        self.magbins = np.array(sorted(magbins_set, reverse=True))
-        self.gmrbins = []
-        for mag_range in sorted(gmrbins_set.keys(), reverse=True):
-            self.gmrbins.append(np.array(sorted(gmrbins_set[mag_range])))
-
-        self.gmrbins.reverse()  # Reverse the list of gmrbins to match the order of magbins
-        
-        # Print off entire bin structure for verification
-        print("Detected magbins:", self.magbins)
-        for arr in self.gmrbins:
-            print("Detected gmrbins for magbin:", arr)  
-
-    # Old methods for 1st test compatibility
-    def get_wp_red(self, mag: int):
-        mag = abs(mag)
-        if mag not in self._wp_red_cache:
-            fname = os.path.join(self.paramsfolder, f'wp_red_M{mag:d}.dat')
-            self._wp_red_cache[mag] = read_wp_file(fname)
-        return self._wp_red_cache[mag]
-    def get_wp_blue(self, mag: int):
-        mag = abs(mag)
-        if mag not in self._wp_blue_cache:
-            fname = os.path.join(self.paramsfolder, f'wp_blue_M{mag:d}.dat')
-            self._wp_blue_cache[mag] = read_wp_file(fname)
-        return self._wp_blue_cache[mag]
-    
-    def get_wp_new(self, mag_idx: float, gmr_idx: float):
-        mag_min = self.magbins[mag_idx]
-        mag_max = self.magbins[mag_idx + 1]
-        gmr_min = self.gmrbins[mag_idx][gmr_idx]
-        gmr_max = self.gmrbins[mag_idx][gmr_idx + 1]
-        data = np.loadtxt(os.path.join(self.paramsfolder, f'wp_mag{mag_max:.4f}to{mag_min:.4f}_gmr{gmr_min:.4f}to{gmr_max:.4f}.dat'))
-        r = data[:,0]
-        wp = data[:,1]
-        wp_err = data[:,2]
-
-        wp_err = np.where(np.isnan(wp_err), abs(0.05*wp), wp_err) # TODO
-
-        return wp, wp_err, r
-    
-    def mag_to_idx(self, mag: float):
-        m = abs(mag)
-        return np.asarray(self.magbins == -m).nonzero()[0][0]
-    
-    @staticmethod
-    def BGS_Y1_4bin(magcut: float):
-        fsky = FootprintManager().get_footprint("Y1", min_passes=1) / DEGREES_ON_SPHERE # Measurements were made on 1-pass footprint
-        return CalData(PARAMS_BGSY1_FOLDER, np.array([-19, -20, -21, -22, -23]), None, magcut, fsky)
-    
-    @staticmethod
-    def BGS_Y1_6bin(magcut: float):
-        fsky = FootprintManager().get_footprint("Y1", min_passes=1) / DEGREES_ON_SPHERE # Measurements were made on 1-pass footprint
-        return CalData(PARAMS_BGSY1_FOLDER, np.array([-17, -18, -19, -20, -21, -22, -23]), None, magcut, fsky)
+    def __init__(self, datafolder: str):
+        self.datafolder = datafolder
+        self.data = self.load_biases()
 
     @staticmethod
-    def BGS_Y3_Test1(magcut: float):
-        fsky = FootprintManager().get_footprint("Y3", min_passes=1) / DEGREES_ON_SPHERE # Measurements were made on 1-pass footprint
-        return CalData(
-            '/mount/sirocco1/imw2293/GROUP_CAT/latsham/data/dr2_wp_1/', 
-            None,
-            None,
-            magcut,
-            fsky)
+    def BGS_DR2_5_30Mpc_v0_3():
+        return BiasData('/mount/sirocco1/imw2293/GROUP_CAT/latsham/data/dr2_wp_2/')
 
-            #np.array([-22.6473, -21.9413, -21.488,  -21.091,  -20.7092, -20.3206, -19.9002, -19.4147, -18.8037, -17.9408, -16.4536]), 
+    def load_biases(self):
+        fn = 'biases_BGS_DR2_5-30Mpc_v0.3.npy'
+        path = os.path.join(self.datafolder, fn)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Bias data file not found: {path}. SCP it from NERSC with this command:\n scp ianw89@saul.nersc.gov:/global/cfs/cdirs/desi/users/ianw89/clustering712/DA2/LSS/loa-v1/LSScats/v1.1/v0.3/export_bias/{fn} /mount/sirocco1/imw2293/GROUP_CAT/latsham/data/dr2_wp_2/")
+
+        return np.load(path)
+
+    
+    def get(self, mag: float, quiescent: bool, propname: str = None, propvalue: float = None):
+        """
+        Get the bias for a given magnitude and quiescent/star-forming status, optionally with a third property.
+        """
+        # Filter by magnitude bin
+        mag_mask = (self.data['magbin_fainter'] >= mag) & (mag >= self.data['magbin_brighter'])
+        filtered_data = self.data[mag_mask]
+
+        # Filter by quiescent/star-forming
+        filtered_data = filtered_data[filtered_data['quiescent'] == quiescent]
+
+        # If a third property is specified, filter by that as well
+        if propname and propvalue is not None:
+            filtered_data = filtered_data[filtered_data['third_property_name'] == propname]
+
+            filtered_data = filtered_data[
+                (filtered_data['third_property_lower'] <= propvalue) &
+                (propvalue <= filtered_data['third_property_upper'])
+            ]
+        # If not, filter for entries where the third property is NaN
+        else:
+            filtered_data = filtered_data[np.isnan(filtered_data['third_property_name'])]
+
+        if len(filtered_data) == 0:
+            raise ValueError("No matching bias data found for the specified parameters.")
+
+        # There should only be one match
+        if len(filtered_data) > 1:
+            raise ValueError("Multiple matching bias data entries found. Please check the input parameters.")
+
+        match = filtered_data[0]
+
+        # If requested mag is away from the mag mean of this bias measurement by more than 0.1 mag, raise a warning
+        mag_mean = match['magbin_mean']
+        if abs(mag - mag_mean) > 0.1:
+            print(f"Warning: Requested magnitude {mag} is away from the mean magnitude {mag_mean} of the bias measurement by more than 0.1 mag.")
+
+        # If requeseted third property value is away from the mean of this bias measurement by more than 0.1, raise a warning
+        if propname and propvalue is not None:
+            measured_prop_mean = match['third_property_mean']
+            if not np.isclose(propvalue, measured_prop_mean, rtol=0.05):
+                print(f"Warning: Requested third property value {propvalue} is away from the mean {measured_prop_mean} of the bias measurement by more than 5%.")
+
+        # Assuming there's only one matching entry after filtering
+        return match['b'], match['b_err_low'], match['b_err_high']
