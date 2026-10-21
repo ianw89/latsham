@@ -304,7 +304,7 @@ void test_Gal2PICAMatchers() {
             prev2 = v2;
         }
 
-        Galaxy g;
+        Galaxy2P g;
         g.lat1 = v1;
         g.lat2 = v2;
         
@@ -323,7 +323,7 @@ void test_Galaxy_LatentModel() {
     LatentModel model = LatentModel(GAL_2P_LATENT_MODEL_TEXT_FILE);
 
     // Typical galaxy values  should go to middle of a latent space
-    Galaxy g = Galaxy();
+    Galaxy2P g = Galaxy2P();
     g.abs_mag_r = -20.0;
     g.color_g_r = 0.8;
     model.forward_transform(g);

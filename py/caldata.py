@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import subprocess
 import os
+import pandas as pd
 
 class BiasData:
     """
@@ -42,7 +43,16 @@ class BiasData:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Bias data file not found: {path}. SCP it from NERSC with this command:\n scp ianw89@saul.nersc.gov:/global/cfs/cdirs/desi/users/ianw89/clustering712/DA2/LSS/loa-v1/LSScats/v1.1/v0.3/export_bias/{fn} /mount/sirocco1/imw2293/GROUP_CAT/latsham/data/dr2_wp_2/")
 
-        return np.load(path)
+        loaded = np.load(path)
+        return loaded
+
+    def write_data_as_txt(self):
+        if (self.data is not None):
+            df = pd.DataFrame(self.data)
+            txt_path = os.path.join(self.datafolder, 'biases_BGS_DR2_5-30Mpc_v0.3.txt')
+            df.to_csv(txt_path, sep=' ', index=False)
+        else:
+            print("No data available to write.")
 
     
     def get(self, mag: float, quiescent: bool, propname: str = None, propvalue: float = None):

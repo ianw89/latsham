@@ -33,7 +33,7 @@ const std::string HALO_2P_LATENT_MODEL_TEXT_FILE = "/mount/sirocco1/imw2293/GROU
 const std::string GAL_2P_LATENT_MODEL_TEXT_FILE = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_2p_model.txt";
 
 
-struct Galaxy : Transformable {
+struct Galaxy2P : Transformable {
     double abs_mag_r; // absolute magnitude in the r band, k-corrected to z=0.1, with h=1.0
     double color_g_r;   // g-r color (mag)
     double lat1, lat2;
@@ -79,7 +79,7 @@ struct Halo : Transformable {
     // temp properties used for ranking
     double rank;
 
-    Galaxy galaxy; // The galaxy that occupies this halo after abundance matching
+    Galaxy2P galaxy; // The galaxy that occupies this halo after abundance matching
 
     double getProperty(int num) override {
         switch (num) {
@@ -645,14 +645,14 @@ public:
 
         //#pragma omp parallel for collapse(2) reduction(+:successes)
         #pragma omp parallel for reduction(+:successes) // Only parallizes outer loop, but 10 at a time is fine...
-        for (size_t i = 0; i < magbins.size() - 1; ++i) {
-            for (size_t j = 0; j < gmrbins[i].size() - 1; ++j) {
-                successes += writeMockForBin(halos, i, j);
+        for (size_t i = 0; i < this->magbins.size() - 1; ++i) {
+            for (size_t j = 0; j < this->gmrbins[i].size() - 1; ++j) {
+                successes += this->writeMockForBin(halos, i, j);
             }
         }
         
-        LOG_INFO("Successfully wrote %d mocks out of %zu\n", successes, total_bins);
-        return successes == total_bins;
+        LOG_INFO("Successfully wrote %d mocks out of %zu\n", successes, this->total_bins);
+        return successes == this->total_bins;
     }
 
 private:
@@ -686,6 +686,201 @@ private:
             outputFile << std::setprecision(8) << h.x << " " << h.y << " " << h.z << "\n";
         }
         LOG_VERBOSE("Mock building: wrote %d galaxies for magbin [%.2f, %.2f], gmrbin [%.3f, %.3f]\n", count, mag_left, mag_right, gmr_left, gmr_right);
+        return count > 0;
+    }
+};
+
+
+struct BiasInfo {
+    double magbin_brighter;
+    double magbin_fainter;
+    double magbin_mean;
+    bool quiescent;
+    std::string third_property_name;
+    double third_property_lower;
+    double third_property_upper;
+    double third_property_mean;
+    double b; // overall bias
+    double b_err_low;
+    double b_err_high;
+    double b_p; // property bias
+    double b_p_err_low;
+    double b_p_err_high;
+    double b_m; // magnitude bias
+};
+
+/**
+ * This connection model uses:
+ * 1) The DR2 v0.3 bias measurements
+ * 2) The galaxy 2-prop ICA model
+ * 3) The halo 4-prop ICA model.
+ */
+class ConnectionModel_DR2v0_3_2P4P : public ConnectionModel {
+public:
+
+    void load() {
+        this->galaxyModel = std::make_unique<LatentModel>(GAL_2P_LATENT_MODEL_TEXT_FILE);
+        this->haloModel = std::make_unique<LatentModel>(HALO_4P_LATENT_MODEL_TEXT_FILE);
+
+        const std::string data_folder = "/mount/sirocco1/imw2293/GROUP_CAT/latsham/data/dr2_wp_2/";
+        const std::string path = data_folder + "biases_BGS_DR2_5-30Mpc_v0.3.txt";
+
+        std::ifstream inputFile(path);
+        if (!inputFile.is_open()) {
+            LOG_ERROR("Failed to open bias data file: %s\n", path.c_str());
+            throw std::runtime_error("Failed to open bias data file");
+        }
+
+        BiasInfo bias;
+        while (inputFile >> bias.magbin_brighter >> bias.magbin_fainter >> bias.magbin_mean
+                         >> bias.quiescent >> bias.third_property_name
+                         >> bias.third_property_lower >> bias.third_property_upper >> bias.third_property_mean
+                         >> bias.b >> bias.b_err_low >> bias.b_err_high
+                         >> bias.b_p >> bias.b_p_err_low >> bias.b_p_err_high
+                         >> bias.b_m) {
+            measured_biases.push_back(bias);
+        }
+        inputFile.close();
+    }
+
+    double g1_h1 = 0.8;
+    double g1_h2 = 0.05;
+    double g1_h3 = 0.15;
+    double g1_h4 = 0.0;
+    double g2_h1 = 0.0;
+    double g2_h2 = 0.2;
+    double g2_h3 = 0.8;
+    double g2_h4 = 0.0;
+
+    void setParamsFromList(std::vector<double> params) {
+        if (params.size() != 8) {
+            LOG_ERROR("Expected 8 parameters for Model_2P4P, got %zu\n", params.size());
+            throw std::runtime_error("Invalid number of parameters for Model_2P4P");
+        }
+        g1_h1 = params[0];
+        g1_h2 = params[1];
+        g1_h3 = params[2];
+        g1_h4 = params[3];
+        g2_h1 = params[4];
+        g2_h2 = params[5];
+        g2_h3 = params[6];
+        g2_h4 = params[7];
+        LOG_INFO("Set model params: g1_h1=%.3f, g1_h2=%.3f, g1_h3=%.3f, g1_h4=%.3f, g2_h1=%.3f, g2_h2=%.3f, g2_h3=%.3f, g2_h4=%.3f\n", g1_h1, g1_h2, g1_h3, g1_h4, g2_h1, g2_h2, g2_h3, g2_h4);
+    }
+
+    bool match(std::vector<Halo>& halos) override {
+        if (!loaded) load();
+
+        // Perf note: I tried storing a lookup of density values, but somehow it was slower than recomputing it.
+        // No gains from parallelizing the match(density) call.
+        // The sorts take ~250ms each on howdy
+        // Not much to improve here. Replacing mock writing with direct call to corrfunc from code is most important.
+
+        //#pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            halos[i].rank = g1_h1 * halos[i].lat1 + g1_h2 * halos[i].lat2 + g1_h3 * halos[i].lat3 + g1_h4 * halos[i].lat4;
+        }
+        sortByRank(halos);
+
+        double density = 0.0;
+        for (size_t i = 0; i < halos.size(); ++i) {
+            density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+            halos[i].galaxy.setLatentProperty(0, Galaxy2P_ICA1Matcher::get().match(density));
+        }
+
+        //#pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            halos[i].rank = g2_h1 * halos[i].lat1 + g2_h2 * halos[i].lat2 + g2_h3 * halos[i].lat3 + g2_h4 * halos[i].lat4;
+        }
+        sortByRank(halos);
+
+        density = 0.0;
+        for (size_t i = 0; i < halos.size(); ++i) {
+            density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+            halos[i].galaxy.setLatentProperty(1, Galaxy2P_ICA2Matcher::get().match(density));
+        }
+
+        // Get the original galaxy property values from the assigned latent ones
+        #pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            this->galaxyModel->inverse_transform(halos[i].galaxy);
+        }
+
+        // **************************************************************************************************
+        // Re-abundance properties match onto itself to ensure original propety distributions are respected
+        // This is a trick to deal with the higher-order residual correlations in the latent space,
+        // which can result in unrealistic property values.
+        // **************************************************************************************************
+
+        //#pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            halos[i].rank = halos[i].galaxy.getProperty(1); 
+        }
+        sortByRank(halos);
+        density = 0.0;
+        for (Halo &h : halos) {
+            density += HALO_DENSITY_INCREMENT; 
+            h.galaxy.setProperty(1, GalaxyColorGMRMatcher::get().match(density));
+        }
+
+        //#pragma omp parallel for
+        for (size_t i = 0; i < halos.size(); ++i) {
+            // Minus sign for magnitudes!!
+            halos[i].rank = - halos[i].galaxy.getProperty(0); 
+        }
+        sortByRank(halos);
+        density = 0.0;
+        for (Halo &h : halos) {
+            density += HALO_DENSITY_INCREMENT; 
+            h.galaxy.setProperty(0, GalaxyMagMatcher::get().match(density));
+        }
+
+        for (size_t i = 0; i < 5 && i < halos.size(); ++i) {
+            const Halo& h = halos[i];
+            LOG_INFO("Halo %d: logmhalo=%.3f, age=%.3f, color=%.3f, abs_mag_r=%.3f\n", i, 
+                h.logmhalo, h.halfmass_scale, h.galaxy.color_g_r, h.galaxy.abs_mag_r);
+        }
+
+        return true;
+    }    
+
+    bool writeMocks(std::vector<Halo>& halos) override {
+        // Write files out in the format that corrfun expects for wp calculation.
+        int successes = 0;
+        size_t total_bins = this->measured_biases.size();
+
+        #pragma omp parallel for reduction(+:successes)
+        for (size_t i = 0; i < this->measured_biases.size() - 1; ++i) {
+            successes += this->writeMockForBin(halos, i);
+        }
+        
+        LOG_INFO("Successfully wrote %d mocks out of %zu\n", successes, total_bins);
+        return successes == total_bins; 
+    }
+
+private:
+    bool loaded = false;
+    std::vector<BiasInfo> measured_biases;
+
+    bool writeMockForBin(std::vector<Halo>& halos, size_t bin) {
+        int count = 0;
+        BiasInfo &info = this->measured_biases[bin];
+
+        std::ostringstream oss;
+        oss << "/mount/sirocco1/imw2293/GROUP_CAT/OUTPUT/LATSHAM/mock_" << bin;
+        std::ofstream outputFile(oss.str());
+
+        // Write the halos whose galaxy (central) fits the criteria defined by this bias bin.
+        for (const Halo &h : halos) {
+            if (h.galaxy.abs_mag_r < info.magbin_brighter || h.galaxy.abs_mag_r > info.magbin_fainter)
+                continue;
+            // TODO need updated galaxy model for the other properties
+
+            ++count;
+            outputFile << std::setprecision(8) << h.x << " " << h.y << " " << h.z << "\n";
+        }
+
+        LOG_VERBOSE("Mock building: wrote %d galaxies for bias bin %zu\n", count, bin);
         return count > 0;
     }
 };
