@@ -17,6 +17,7 @@
 #include <highfive/H5File.hpp>
 #include <hdf5.h>
 #include <random>
+#include <type_traits>
 #include "latsham.hpp"
 #include "models.hpp"
 
@@ -34,6 +35,7 @@
 
 static FILE* MSG_PIPE = nullptr;
 static std::vector<double> model_params;
+static std::string model_name;
 
 static std::string to_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
@@ -76,7 +78,8 @@ static std::vector<double> read_field(hid_t ds, const std::string& field_lower,
     return buf;
 }
 
-std::vector<Halo> read_halo_catalog(const std::string& path) {
+template<typename T>
+std::vector<Halo<T>> read_halo_catalog(const std::string& path) {
     HighFive::File file(path, HighFive::File::ReadOnly);
     auto dataset = file.getDataSet("halos/table");
     hsize_t n = dataset.getDimensions()[0];
@@ -104,7 +107,7 @@ std::vector<Halo> read_halo_catalog(const std::string& path) {
     auto c_v        = read_field(ds_id, "c",              name_map, n);
     auto spin_v     = read_field(ds_id, "spin",           name_map, n);
 
-    std::vector<Halo> halos(n);
+    std::vector<Halo<T>> halos(n);
     for (hsize_t i = 0; i < n; ++i) {
         halos[i].x              = x_v[i];
         halos[i].y              = y_v[i];
@@ -122,12 +125,12 @@ std::vector<Halo> read_halo_catalog(const std::string& path) {
     return halos;
 }
 
-static char doc[] = "latsham: Latent model abundance matching of a halos catalog"; 
+static char doc[] = "latsham: Latent model abundance matching of a halo catalog"; 
 
 static char args_doc[] = "";
 
 static struct argp_option options[] = {
-    {"model",        'm', "MODEL PARAMETERS",                   0,  "Specify the connection model parameters to use", 1},
+    {"model",        'm', "MODEL PARAMETERS",                   0,  "Specify the connection model (2P2P, 2P4P, 7P4P) and parameters to use in a comma-separated list", 1},
     {"pipe",         'P', "PIPEID",                             0,  "Specify a pipe ID communication with emcee manager", 1},
     { 0 }
 };
@@ -146,6 +149,9 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state) {
             }
             ss.str(arg);
             ss.clear();
+            // First word is model name
+            std::getline(ss, model_name, ',');
+            // Rest are parameter values
             while (std::getline(ss, item, ',')) {
                 model_params.push_back(std::stod(item));
             }
@@ -185,11 +191,12 @@ void send_completed_msg(bool success) {
     }
 }
 
-
-void writeFullMock(std::vector<Halo>& halos) {
+template<typename T>
+void writeFullMock(std::vector<Halo<T>>& halos) {
     std::string out_filename = "/mount/sirocco1/imw2293/GROUP_CAT/OUTPUT/LATSHAM/full_mock.dat";
     std::ofstream outputFile(out_filename);
-    for (const Halo& h : halos) {
+    // TODO update to generic write call for galaxy properties
+    for (const Halo<T>& h : halos) {
         outputFile << h.x << " " << h.y << " " << h.z 
         << " " << h.logmhalo << " " << h.halfmass_scale << " " << h.spin << " " << h.c << " " << h.galaxy.abs_mag_r << " " << h.galaxy.color_g_r << "\n";
 
@@ -239,61 +246,47 @@ std::vector<double> await_request() {
 }
 
 
-int main(int argc, char **argv) {
-
-    LOG_INFO("Welcome to Latent-SHAM\n");
-
-    argp_parse (&argp, argc, argv, 0, 0, nullptr);
-
+template<typename Model> // The connection model
+int run_pipeline(const std::vector<double>& model_params) {
+    using T = typename Model::GalaxyModel;
     srand(5981);
 
     Timer timer;
     timer.begin();
-    std::vector<Halo> halos = read_halo_catalog(HALO_CATALOG);
+    std::vector<Halo<T>> halos = read_halo_catalog<T>(HALO_CATALOG);
     timer.endAndLog("Time to read halo catalog");
 
     // Remove halos below a mass threshold for now
     double logmhalo_cut = 11.0;
     halos.erase(std::remove_if(halos.begin(), halos.end(),
-        [logmhalo_cut](const Halo& h) { return h.logmhalo < logmhalo_cut; }), halos.end());
+        [logmhalo_cut](const Halo<T>& h) { return h.logmhalo < logmhalo_cut; }), halos.end());
 
     //ConnectionModel_1 model;
     //model.scatter = 0.83; 
-    ConnectionModel *model = nullptr;
-
-    if (!model_params.empty()) {
-        // Put other models here when ready
-        if (model_params.size() == 8) {
-            model = new ConnectionModel_2P4P();
-            model->setParamsFromList(model_params);
-            model->load();
-        } else if (model_params.size() == 4) {
-            model = new ConnectionModel_2P2P();
-            model->setParamsFromList(model_params);
-            model->load();
-        } else {
-            throw std::runtime_error("Aborting. Received unexpected number of model parameters: " + std::to_string(model_params.size()));
-        }
-    } else {
-        // Default model
-        model = new ConnectionModel_2P4P();
-        model->load();
-    }
+    Model* model = new Model();
+    if (model_params.size() > 0)
+        model->setParamsFromList(model_params);
+    model->load();
 
 
-    // Apply halo model to get latent parameters
+
+    // Apply halo model to get latent parameters for each halo
     int k = 0;
-    for (Halo &h : halos) {
+    for (Halo<T> &h : halos) {
         model->haloModel->forward_transform(h);
     }
 
+    // Do abundance matching
     timer.begin();
     model->match(halos);
     timer.endAndLog("Time for initial abundance matching");
+
+    // Write mocks on subpopulations
     timer.begin();
     model->writeMocks(halos);
     timer.endAndLog("Time to write initial mocks");
 
+    // If we have a pipe for MCMC, listen for next parameter set
     std::vector<double> params;
     timer.begin();
     while (MSG_PIPE != NULL) {
@@ -320,9 +313,24 @@ int main(int argc, char **argv) {
         send_completed_msg(success);
     }
 
-    // Write everything 
+    // Write the full mock 
     writeFullMock(halos);
 
     LOG_INFO("Latsham finished successfully, exiting.\n");
     return 0;
+}
+
+
+int main(int argc, char** argv) {
+    LOG_INFO("Welcome to Latent-SHAM\n");
+    argp_parse (&argp, argc, argv, 0, 0, nullptr);
+
+    if (model_name.empty()) {
+        model_name = "7P4P";
+    }
+
+    if      (model_name == "2P4P")      return run_pipeline<ConnectionModel_2P4P>(model_params);
+    else if (model_name == "2P2P")      return run_pipeline<ConnectionModel_2P2P>(model_params);
+    else if (model_name == "7P4P")  return run_pipeline<ConnectionModel_DR2v0_3_7P4P>(model_params);
+    else throw std::runtime_error("Unknown model: " + model_name);
 }

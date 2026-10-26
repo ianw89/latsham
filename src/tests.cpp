@@ -262,7 +262,7 @@ void test_AMCDF_GalICA1() {
 void test_GalaxyMagMatcher() {
     printf("\n=== GalaxyMagMatcher TESTS ===\n");
 
-    auto matcher = GalaxyMagMatcher::get();
+    auto& matcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGR_DENSITY);
 
     // The sim box will start at 1.56e-8 so we need at least this low density.
     // Currently cannot handle much higher densities than 0.05
@@ -282,8 +282,8 @@ void test_GalaxyMagMatcher() {
 void test_Gal2PICAMatchers() {
     printf("\n=== Galaxy 2P ICA Matchers TESTS ===\n");
 
-    auto matcher1 = Galaxy2P_ICA1Matcher::get();
-    auto matcher2 = Galaxy2P_ICA2Matcher::get();
+    auto& matcher1 = AbundanceMatchingRegistry::get().getMatcher(GAL_2P_ICA1_DENSITY);
+    auto& matcher2 = AbundanceMatchingRegistry::get().getMatcher(GAL_2P_ICA2_DENSITY);
 
     // The sim box will start at 1.56e-8 so we need at least this low density.
     // Currently cannot handle much higher densities than 0.05
@@ -351,13 +351,47 @@ void test_Galaxy_LatentModel() {
     
 }
 
+void test_Galaxy_7LatentModel() {
+    printf("\n=== Galaxy 7-property LatentModel TESTS ===\n");
+
+    LatentModel model = LatentModel(GAL_PCA_7P_M4_MODEL_TEXT_FILE);
+
+    // Typical galaxy values for the 4th mag bin
+    //  should go to middle of a latent space that is trained on this sample
+    Galaxy7P g = Galaxy7P();
+    g.abs_mag_r = -20.9; // middle
+    g.logmstar = 10.7; // middle
+    g.color_g_r = 0.6; // typical blue
+    g.dn4000 = 1.4; // typical star-former
+    g.halflight_radius = 3.0; // typical
+    g.c9050 = 4.0;
+    g.loghalpha = 1.0; // reasonable for star-former
+    model.forward_transform(g);
+    TEST_CASE(std::isfinite(g.lat1) && g.lat1 > -3 && g.lat1 < 3 , g.lat1, "Forward transform Latent value 1 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat2) && g.lat2 > -3 && g.lat2 < 3 , g.lat2, "Forward transform Latent value 2 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat3) && g.lat3 > -3 && g.lat3 < 3 , g.lat3, "Forward transform Latent value 3 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat4) && g.lat4 > -3 && g.lat4 < 3 , g.lat4, "Forward transform Latent value 4 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat5) && g.lat5 > -3 && g.lat5 < 3 , g.lat5, "Forward transform Latent value 5 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat6) && g.lat6 > -3 && g.lat6 < 3 , g.lat6, "Forward transform Latent value 6 should be finite and reasonable");
+    TEST_CASE(std::isfinite(g.lat7) && g.lat7 > -3 && g.lat7 < 3 , g.lat7, "Forward transform Latent value 7 should be finite and reasonable");
+    model.inverse_transform(g);
+    TEST_CASE(isclose(g.abs_mag_r, -20.9, 1e-5), g.abs_mag_r, "Roundtrip abs_mag_r should be very close to original");
+    TEST_CASE(isclose(g.logmstar, 10.7, 1e-5), g.logmstar, "Roundtrip logmstar should be very close to original");
+    TEST_CASE(isclose(g.color_g_r, 0.6, 1e-5), g.color_g_r, "Roundtrip color_g_r should be very close to original");
+    TEST_CASE(isclose(g.dn4000, 1.4, 1e-5), g.dn4000, "Roundtrip dn4000 should be very close to original");
+    TEST_CASE(isclose(g.halflight_radius, 3.0, 1e-5), g.halflight_radius, "Roundtrip halflight_radius should be very close to original");
+    TEST_CASE(isclose(g.c9050, 4.0, 1e-5), g.c9050, "Roundtrip c9050 should be very close to original");
+    TEST_CASE(isclose(g.loghalpha, 1.0, 1e-5), g.loghalpha, "Roundtrip loghalpha should be very close to original");
+}
+
+
 void test_Halo_LatentModel() {
     printf("\n=== Halo LatentModel TESTS ===\n");
 
      LatentModel model = LatentModel(HALO_4P_LATENT_MODEL_TEXT_FILE);
 
      // Typical halo values  should go to middle of a latent space
-    Halo h = Halo();
+    Halo<Galaxy2P> h = Halo<Galaxy2P>();
     h.logmhalo = 12.0;
     h.halfmass_scale = 0.3;
     h.c = 10.0;
@@ -374,21 +408,21 @@ void test_Halo_LatentModel() {
 void test_E2E_2P2PModel() {
     printf("\n=== End to End 2P2P Model TESTS ===\n");
 
-    std::vector<Halo> halos;
+    std::vector<Halo<Galaxy2P>> halos;
     for (int i = 0; i < 5; i++) {
-        Halo h;
+        Halo<Galaxy2P> h;
         h.logmhalo = 13.0 - i * 0.1;
         h.halfmass_scale = 0.4; // fix
         halos.push_back(h);
     } 
 
-    ConnectionModel *model = new ConnectionModel_2P2P(); 
+    ConnectionModel_2P2P *model = new ConnectionModel_2P2P(); 
     model->load();
     model->setParamsFromList( // Identity transform in latent spaces
         {1.0, 0.0, 
          0.0, 1.0}); 
 
-    for (Halo &h : halos) {
+    for (Halo<Galaxy2P> &h : halos) {
         model->haloModel->forward_transform(h);
     }
 
@@ -407,7 +441,7 @@ void test_E2E_2P2PModel() {
     //printf("G-r color density function: min_x=%.10f, max_x=%.10f\n", g_r_density.getLeftEdge(), g_r_density.getRightEdge());
 
     // Check that values are within the limits of them.
-    for (Halo &h : halos) {
+    for (Halo<Galaxy2P> &h : halos) {
         // mag is always backwards of what you think
         TEST_CASE(h.galaxy.abs_mag_r >= mag_r_density.getRightEdge() && h.galaxy.abs_mag_r <= mag_r_density.getLeftEdge(),
                   h.galaxy.abs_mag_r,
@@ -429,9 +463,9 @@ void test_E2E_2P2PModel() {
 void test_E2E_2P4PModel() {
     printf("\n=== End to End 2P4P Model TESTS ===\n");
 
-    std::vector<Halo> halos;
+    std::vector<Halo<Galaxy2P>> halos;
     for (int i = 0; i < 5; i++) {
-        Halo h;
+        Halo<Galaxy2P> h;
         h.logmhalo = 13.0 - i * 0.1;
         h.halfmass_scale = 0.4; // fix
         h.spin = 1.0; // fix
@@ -439,10 +473,10 @@ void test_E2E_2P4PModel() {
         halos.push_back(h);
     } 
 
-    ConnectionModel *model = new ConnectionModel_2P4P(); 
+    ConnectionModel_2P4P *model = new ConnectionModel_2P4P(); 
     model->load();
 
-    for (Halo &h : halos) {
+    for (Halo<Galaxy2P> &h : halos) {
         model->haloModel->forward_transform(h);
     }
 
@@ -459,7 +493,7 @@ void test_E2E_2P4PModel() {
     TabulatedDensityFunction g_r_density = TabulatedDensityFunction(GAL_COLOR_GMR_DENSITY);
 
     // Check that values are within the limits of them.
-    for (Halo &h : halos) {
+    for (Halo<Galaxy2P> &h : halos) {
         // mag is always backwards of what you think
         TEST_CASE(h.galaxy.abs_mag_r >= mag_r_density.getRightEdge() && h.galaxy.abs_mag_r <= mag_r_density.getLeftEdge(),
                   h.galaxy.abs_mag_r,
@@ -477,6 +511,34 @@ void test_E2E_2P4PModel() {
     }
 }
 
+void test_E2E_DR2v0_3_7P4PModel() {
+    printf("\n=== End to End DR2v0.3 7P4P Model TESTS ===\n");
+
+    std::vector<Halo<Galaxy7P>> halos;
+    for (int i = 0; i < 5; i++) {
+        Halo<Galaxy7P> h;
+        h.logmhalo = 13.0 - i * 0.1;
+        h.halfmass_scale = 0.4; // fix
+        h.spin = 1.0; // fix
+        h.c = 10.0; // fix
+        halos.push_back(h);
+    } 
+
+    ConnectionModel_DR2v0_3_7P4P *model = new ConnectionModel_DR2v0_3_7P4P(); 
+    model->load();
+
+    for (Halo<Galaxy7P> &h : halos) {
+        model->haloModel->forward_transform(h);
+    }
+
+    // Does everything; now all the halos have all the galaxy properties according to this model
+    model->match(halos); 
+
+    // TODO more tests later
+}
+
+
+
 int main () {
     test_TabulatedDensityFunction();
     test_AMCDF_HaloICA1();
@@ -484,11 +546,13 @@ int main () {
     test_AMCDF_GalaxyGmR();
     test_AMCDF_GalICA1();
     test_Galaxy_LatentModel();
+    test_Galaxy_7LatentModel();
     test_Halo_LatentModel();
     test_GalaxyMagMatcher();
     test_Gal2PICAMatchers();
     test_E2E_2P2PModel();
     test_E2E_2P4PModel();
+    test_E2E_DR2v0_3_7P4PModel();
 
     std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;
     std::cout << "All tests passed successfully." << std::endl;

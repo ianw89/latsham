@@ -21,6 +21,8 @@
 #include <boost/math/tools/roots.hpp>
 #include <limits>
 #include <stdlib.h>
+#include <map>
+#include <memory>
 
 #define SILENT 0
 #define VERBOSE 0
@@ -293,8 +295,19 @@ public:
 };
 
 #define NZBIN 200
+
+/**
+ * Performs abundance matching against the tabulated density function loaded from the
+ * given file (see AMCDF / TabulatedDensityFunction). This used to be an abstract base
+ * class with near-identical reimplementations of match() in each subclass; since every
+ * use case only differs by which density function file is loaded, that's now just a
+ * constructor parameter. See AbundanceMatchingRegistry below for a central place that
+ * creates/caches instances of this class, one per density function file.
+ */
 class AbundanceMatchingManager {
     public:
+
+    AbundanceMatchingManager(const std::string& filename) : cdf(filename) {}
 
     /**
      * Match a provided density (which should be a running cumulative density) 
@@ -304,7 +317,14 @@ class AbundanceMatchingManager {
      * 
      * Returns the property value at the matched cumulative density.
      */
-    virtual double match(double density) = 0;
+    double match(double density) {
+        if (density > 0.05) {
+            LOG_WARN("Warning: Matching density %.3e is too dense for current density functions.\n", density);
+        }
+
+        // Best approach is to use an inverted spline of the CDF to directly get the property
+        return cdf.eval_inverse(density);
+    }
 
     /** 
      * Matching for flux-limited mode - tracks the density seperately for overlapping redshift bins.
@@ -386,18 +406,57 @@ class AbundanceMatchingManager {
     }
 
     private:
+      AMCDF cdf;
+
       bool needs_setup = true;
       int negcnt[NZBIN];
       double zcnt[NZBIN];
       double volume[NZBIN], zlo[NZBIN], zhi[NZBIN], vhi[NZBIN], vlo[NZBIN];
 };
-  
 
-// Class that holds a model matrices for transforming data between an original feature space and a latent space.
-// Supports invertable linear PCA/ICA like models with whitening.
-class LatentModel {
+/**
+ * Central repository of AbundanceMatchingManager instances, keyed by the density function
+ * file they were built from. Lazily constructs and caches a manager per unique file so the
+ * AMCDF spline construction only ever happens once per file.
+ */
+class AbundanceMatchingRegistry {
+public:
+    static AbundanceMatchingRegistry& get() {
+        static AbundanceMatchingRegistry inst;
+        return inst;
+    }
+
+    AbundanceMatchingManager& getMatcher(const std::string& filename) {
+        auto it = matchers.find(filename);
+        if (it == matchers.end()) {
+            it = matchers.emplace(filename, std::make_unique<AbundanceMatchingManager>(filename)).first;
+        }
+        return *it->second;
+    }
+
+private:
+    AbundanceMatchingRegistry() = default;
+    std::map<std::string, std::unique_ptr<AbundanceMatchingManager>> matchers;
+};
+
+
+// Interface for latent models (PCA/ICA) that can transform data to and from a latent space.
+class ILatentModel {
+public:
+    virtual void forward_transform(Transformable &obj) = 0;
+    virtual void inverse_transform(Transformable &obj) = 0;
+    virtual void print_model() = 0;
+    virtual int getFeatureCount() = 0;
+    virtual void load() = 0;
+};
+
+// Class that holds a basic model as matrices for transforming data between an original feature space and a latent space.
+// The matrix loaded from disk should contain everything needed to transform folded into a single matrix for this to work as intended.
+class LatentModel : public ILatentModel {
 public:
     LatentModel(std::string model_file) : model_file(model_file) {}
+
+    ~LatentModel() = default;
 
     // Forward: IC[i] = sum_j (x[j] - mu[j]) * A[j][i]
     void forward_transform(Transformable &obj) {
@@ -435,6 +494,10 @@ public:
             for (int j = 0; j < NFEAT; ++j) std::cout << B[i][j] << " ";
             std::cout << "\n";  
         }
+    }
+
+    int getFeatureCount() {
+        return NFEAT;
     }
 
 private:

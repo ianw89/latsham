@@ -90,13 +90,13 @@ class BiasData:
         # If requested mag is away from the mag mean of this bias measurement by more than 0.1 mag, raise a warning
         mag_mean = match['magbin_mean']
         if abs(mag - mag_mean) > 0.1:
-            print(f"Warning: Requested magnitude {mag} is away from the mean magnitude {mag_mean} of the bias measurement by more than 0.1 mag.")
+            print(f"Warning: Requested magnitude {mag} is away from the mean magnitude {mag_mean} for bin [{match['magbin_brighter']}, {match['magbin_fainter']}] of the bias measurement by more than 0.1 mag.")
 
         # If requeseted third property value is away from the mean of this bias measurement by more than 0.1, raise a warning
         if propname and propvalue is not None:
             measured_prop_mean = match['third_property_mean']
             if not np.isclose(propvalue, measured_prop_mean, rtol=0.05):
-                print(f"Warning: Requested third property value {propvalue} is away from the mean {measured_prop_mean} of the bias measurement by more than 5%.")
+                print(f"Warning: Requested third property value {propvalue} fits into bin [{match['third_property_lower']}, {match['third_property_upper']}] but is away from the mean {measured_prop_mean} for  of the bias measurement by more than 5%.")
 
         # Assuming there's only one matching entry after filtering
         return match['b'], match['b_err_low'], match['b_err_high']
