@@ -18,7 +18,9 @@
 #include <string>
 #include <fstream>
 #include <iostream>
-#include <boost/math/tools/roots.hpp>
+#include <algorithm>
+#include <sstream>
+//#include <boost/math/tools/roots.hpp>
 #include <limits>
 #include <stdlib.h>
 #include <map>
@@ -28,12 +30,32 @@
 #define VERBOSE 0
 #define PERF 1
 
-using boost::math::tools::eps_tolerance;
-using boost::math::tools::toms748_solve;
+#define NORMALIZE_DENSITY_FUNCTIONS 1
+
+//using boost::math::tools::eps_tolerance;
+//using boost::math::tools::toms748_solve;
 
 // TODO Let's replace these with Boost functions soon
 double qromo(double (*func)(double), double a, double b, double (*choose)(double(*)(double), double, double, int));
 double midpnt(double (*func)(double), double a, double b, int n);
+
+/**
+ * Get a linearly interpolated value from a set of x and y values.
+ *
+ * @param x The x values (must be sorted in ascending order).
+ * @param y The y values corresponding to the x values.
+ * @param xvalue The x value at which to interpolate.
+ * @return The interpolated y value.
+ */
+double lin_interp(const std::vector<double>& x, const std::vector<double>& y, double xvalue) {
+    auto it = std::lower_bound(x.begin(), x.end(), xvalue);
+    if (it == x.begin()) return y.front();
+    if (it == x.end())   return y.back();
+    auto i1 = it;
+    auto i0 = std::prev(it);
+    double t = (xvalue - *i0) / (*i1 - *i0);
+    return y[i0 - x.begin()] + t * (y[i1 - x.begin()] - y[i0 - x.begin()]); // Linear interpolation between the two nearest points
+}
 
 
 // LOGGING
@@ -80,6 +102,10 @@ double distance_redshift(double z) {
     return x;
 }
 */
+
+inline double absmagToLogLgal(double mag) {
+    return (4.65 - mag) / 2.5; // log10(L/Lsun)
+}
 
 int filesize(const std::string &filename) {
     int size = 0;
@@ -170,6 +196,9 @@ public:
         const std::vector<double> &px = pdf.getX();  // x values for the density function
         const std::vector<double> &rho = pdf.getDensity();  // density at each bin 
 
+        std::vector<double> propValues; // x values (property values) for the CDF
+        std::vector<double> logCumulativeDensity; // y values (log cumulative number density) for each x
+
         // We calculate the CDF based on the PDF by directly integrating from right to left (end of file backwards) 
         // using the trapezoid rule, so the bin width is (x[i+1] - x[i]) and the density is rho[i] at the bin center.
 
@@ -179,13 +208,13 @@ public:
         // TODO more sanity checks here. Maybe on the density numbers
         // In the group finder the halo mass function is in different units
 
-        cx.resize(cnt);
+        propValues.resize(cnt);
         logCumulativeDensity.resize(cnt);
 
         double sum = 0.0;
         //double min = -80.0; // Minimum log cumulative density to avoid issues with log(0)
         //double dmin = 0.01; // This is redundant
-        cx[cnt - 1] = px[cnt - 1];
+        propValues[cnt - 1] = px[cnt - 1];
         logCumulativeDensity[cnt - 1] = -80.0;; // assume n(> last point) = 0
         //min += dmin;
         for (int i = cnt - 2; i >= 0; i--) {
@@ -197,44 +226,31 @@ public:
             // TODO Depending on the exact meaning of double on other hardware this might require tweaking.
             if (area < 1e-14) area = 1e-14; 
             sum += area;
-            cx[i] = px[i];
+            propValues[i] = px[i];
             logCumulativeDensity[i] = log(sum);
             //min += dmin; // cannot repeat values for inversion
         }
 
-        
-        // Fit spline to the cumulative density function
-        acc = gsl_interp_accel_alloc();
-        spline = gsl_spline_alloc(gsl_interp_steffen, cnt);
-        if (!spline || !acc) {
-            LOG_ERROR("Failed to allocate GSL spline for CDF\n");
-            exit(1);
-        }
         // Reverse order if needed because GSL splines must be monotonically increasing in x
-        if (cx[0] > cx[cnt - 1]) {
-            std::reverse(cx.begin(), cx.end());
+        if (propValues[0] > propValues[cnt - 1]) {
+            std::reverse(propValues.begin(), propValues.end());
             std::reverse(logCumulativeDensity.begin(), logCumulativeDensity.end());
-        }
-        int status = gsl_spline_init(spline, cx.data(), logCumulativeDensity.data(), cnt);
-        if (status) {
-            LOG_ERROR("GSL spline init failed for CDF: %s\n", gsl_strerror(status));
-            exit(1);
         }
 
         
         // Print out the logCumulativeDensity and cx values for debugging
         LOG_VERBOSE("Cumulative density function values for %s:\n", filename.c_str());
         for (int i = 0; i < cnt; ++i) {
-            LOG_VERBOSE("  x: %.4f, logCumulativeDensity: %.6f\n", cx[i], logCumulativeDensity[i]);
+            LOG_VERBOSE("  x: %.4f, logCumulativeDensity: %.6f\n", propValues[i], logCumulativeDensity[i]);
         }       
 
         
-        // Now let's fit another spline for the inverse (reverse if needed)
-        cx_inv.resize(cnt);
+        // Now let's fit a spline for prop value as a function of log cumulative density (reverse if needed)
+        propValues_inv.resize(cnt);
         logCumulativeDensity_inv.resize(cnt);
         bool reverse = logCumulativeDensity[0] > logCumulativeDensity[cnt - 1]; 
         for (int i = 0; i < cnt; ++i) {
-            cx_inv[i] = reverse ? cx[cnt - 1 - i] : cx[i];
+            propValues_inv[i] = reverse ? propValues[cnt - 1 - i] : propValues[i];
             logCumulativeDensity_inv[i] = reverse ? logCumulativeDensity[cnt - 1 - i] : logCumulativeDensity[i];
         }
 
@@ -244,7 +260,7 @@ public:
             LOG_ERROR("Failed to allocate GSL spline for CDF inverse\n");
             exit(ENOMEM);
         }
-        status = gsl_spline_init(inv_spline, logCumulativeDensity_inv.data(), cx_inv.data(), cnt);
+        auto status = gsl_spline_init(inv_spline, logCumulativeDensity_inv.data(), propValues_inv.data(), cnt);
         if (status) {
             LOG_ERROR("GSL spline init failed for CDF inverse: %s\n", gsl_strerror(status));
             exit(ENOMEM);
@@ -253,42 +269,51 @@ public:
         // Print out the logCumulativeDensity and cx values for debugging
         LOG_VERBOSE("Inverted cumulative density function values for %s:\n", filename.c_str());
         for (int i = 0; i < cnt; ++i) {
-            LOG_VERBOSE("  logCumulativeDensity: %.6f  x: %.4f, \n", logCumulativeDensity_inv[i], cx_inv[i]);
+            LOG_VERBOSE("  logCumulativeDensity: %.6f  x: %.4f, \n", logCumulativeDensity_inv[i], propValues_inv[i]);
         }    
 
         LOG_VERBOSE("Built cumulative density spline for %s with %d points.\n", filename.c_str(), cnt);
     }
 
     double getLeftEdge() const {
-        return cx[0];
+        return this->propValues_inv.front();
     }
     double getRightEdge() const {
-        return cx[cx.size() - 1];
+        return this->propValues_inv.back();
     }
 
     /**
-     * Evaluate the cumulative density function n(>value) at the given value using spline interpolation.
-     * 
-     * Returns the cumulative density n(>value) in units of number/(Mpc/h)^3. 
+     * Get a property value for a given cumulative density value.
+     * If NORMALIZE_DENSITY_FUNCTIONS is enabled, it should be a normalized cumulative density value between 0 and 1.
+     * Otherwise it should be in physical units matching the tabulated density function file (usually Mpc^-3 h^3).
      */
-    double eval(double value) {
-        // Spline works on log CDF, so exponentiate the result to get n(>value)
-        return exp(gsl_spline_eval_extrap(spline, cx.data(), logCumulativeDensity.data(), cx.size(), value, acc));
-    }
-
     double eval_inverse(double cumulativeDensity) {
         // Given a cumulative density, return the corresponding property value using the inverse spline
-        return gsl_spline_eval_extrap(inv_spline, logCumulativeDensity_inv.data(), cx_inv.data(), cx_inv.size(), log(cumulativeDensity), inv_acc);
+        //return gsl_spline_eval_extrap(inv_spline, logCumulativeDensity_inv.data(), propValues_inv.data(), propValues_inv.size(), log(cumulativeDensity), inv_acc);
+
+        // Instead let's try linear interpolation for now
+        // TODO is this wrong because it's in log space?
+        return lin_interp(logCumulativeDensity_inv, propValues_inv, log(cumulativeDensity));
+    }
+
+    /**
+     * @brief Normalize the cumulative density function so that the maximum cumulative density is 1.0
+     */
+    void normalize() {
+        
+        double max_density = exp(logCumulativeDensity_inv.back());
+        if (max_density <= 0) {
+            LOG_ERROR("Cannot normalize CDF: maximum cumulative density is non-positive (%.6e)\n", max_density);
+            return;
+        }
+        for (double &val : this->logCumulativeDensity_inv) {
+            val -= log(max_density);
+        }
     }
 
 //private:
-    std::vector<double> cx; // x values for the cumulative density function (same as PDF x values)
-    std::vector<double> logCumulativeDensity; // log cumulative number density for each
-    gsl_interp_accel* acc;
-    gsl_spline* spline;
-
-    std::vector<double> cx_inv; // x values for the cumulative density function (same as PDF x values)
-    std::vector<double> logCumulativeDensity_inv; // log cumulative number density for each
+    std::vector<double> propValues_inv; // x values (property values) for the inverse CDF
+    std::vector<double> logCumulativeDensity_inv;  // log cumulative number density for each, reversed for inversion
     gsl_interp_accel* inv_acc;
     gsl_spline* inv_spline;
 
@@ -297,11 +322,8 @@ public:
 #define NZBIN 200
 
 /**
- * Performs abundance matching against the tabulated density function loaded from the
- * given file (see AMCDF / TabulatedDensityFunction). This used to be an abstract base
- * class with near-identical reimplementations of match() in each subclass; since every
- * use case only differs by which density function file is loaded, that's now just a
- * constructor parameter. See AbundanceMatchingRegistry below for a central place that
+ * Performs abundance matching against a cumulative density function. 
+ * See AMCDF / TabulatedDensityFunction. See AbundanceMatchingRegistry below for a central place that
  * creates/caches instances of this class, one per density function file.
  */
 class AbundanceMatchingManager {
@@ -318,11 +340,10 @@ class AbundanceMatchingManager {
      * Returns the property value at the matched cumulative density.
      */
     double match(double density) {
-        if (density > 0.05) {
+        if (NORMALIZE_DENSITY_FUNCTIONS!=1 && density > 0.05) {
             LOG_WARN("Warning: Matching density %.3e is too dense for current density functions.\n", density);
         }
 
-        // Best approach is to use an inverted spline of the CDF to directly get the property
         return cdf.eval_inverse(density);
     }
 
@@ -405,10 +426,19 @@ class AbundanceMatchingManager {
         zcnt[i] = negcnt[i] = 0;
     }
 
+    void normalize() {
+        if (this->normalized) return;
+        
+        this->cdf.normalize();
+        // TOOD if we need the zbins version, think about this
+        this->normalized = true;
+    }
+
     private:
       AMCDF cdf;
 
       bool needs_setup = true;
+      bool normalized = false;
       int negcnt[NZBIN];
       double zcnt[NZBIN];
       double volume[NZBIN], zlo[NZBIN], zhi[NZBIN], vhi[NZBIN], vlo[NZBIN];

@@ -15,12 +15,13 @@
 #include <filesystem>
 #include <iostream>
 #include "latsham.hpp"
+#include <iomanip>
 
 // This file is already cut to central halos only; no subhalos. That's the 'C' in the name.
 const std::string HALO_CATALOG = "/mount/sirocco1/imw2293/GROUP_CAT/DATA/POPMOCK/smdpl_z0.19717.M1E11.C.MagBin4.h5";
 double constexpr BOX_SIZE = 400.0; // Mpc/h, from the simulation specs
 double constexpr SIM_VOLUME = BOX_SIZE * BOX_SIZE * BOX_SIZE; // (Mpc/h)^3
-double constexpr HALO_DENSITY_INCREMENT = 1.0 / SIM_VOLUME; 
+double constexpr HALO_PHYSICAL_DENSITY_INCREMENT = 1.0 / SIM_VOLUME; 
 // ('index', 'ID', 'upid', 'M200b', 'Mpeak', 'mvir', 'rvir', 'rs', 'vmax', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'Halfmass_Scale', 'Spin', 'c', 'LOGMHALO', 'NOISE')
 
 const std::string GAL_MAGR_DENSITY = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/gal_abs_mag_r_k_best_density_func.dat";
@@ -93,6 +94,27 @@ struct Galaxy7P : Transformable {
     double c9050;
     double loghalpha;
     double lat1, lat2, lat3, lat4, lat5, lat6, lat7;
+
+
+    /**
+     * Determine if a galaxy is quiescent using a luminosity depdendent Dn4000 cut. 
+     * This copies the method used in the BGS DR1 group catalog paper (https://arxiv.org/pdf/2610.20919) and the BGS DR2 clsutering measurements paper.
+     */
+    bool isQuiescent() const {
+        double dcrit = 1.452 + 0.123 * (1 + std::erf((absmagToLogLgal(abs_mag_r) - 9.275) / 1.186));
+        return dn4000 > dcrit;
+    }
+
+    double getPropertyByName(const std::string& name) const {
+        if (name == "ABS_MAG_R") return abs_mag_r;
+        else if (name == "LOGMSTAR") return logmstar;
+        else if (name == "G_R_BEST") return color_g_r;
+        else if (name == "DN4000_MODEL") return dn4000;
+        else if (name == "SHAPE_R_KPC") return halflight_radius;
+        else if (name == "c9050") return c9050;
+        else if (name == "HALPHA_EW") return pow(10, loghalpha);
+        else throw std::invalid_argument("Invalid property name: " + name);
+    }
 
     double getProperty(int num) override {
         switch (num) {
@@ -296,7 +318,7 @@ public:
         // Now abundance match to galaxy r band abs magnitude using
         double density = 0.0;
         for (Halo<Galaxy2P>& h : halos) {
-            density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; // cumulative density of halos above this mass
             h.galaxy.abs_mag_r = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGR_DENSITY).match(density);
         }
 
@@ -363,7 +385,7 @@ public:
 
         double density = 0.0;
         for (size_t i = 0; i < halos.size(); ++i) {
-            density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; // cumulative density of halos above this mass
             halos[i].galaxy.setLatentProperty(0, AbundanceMatchingRegistry::get().getMatcher(GAL_2P_ICA1_DENSITY).match(density));
         }
 
@@ -375,7 +397,7 @@ public:
 
         density = 0.0;
         for (size_t i = 0; i < halos.size(); ++i) {
-            density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; // cumulative density of halos above this mass
             halos[i].galaxy.setLatentProperty(1, AbundanceMatchingRegistry::get().getMatcher(GAL_2P_ICA2_DENSITY).match(density));
         }
 
@@ -395,7 +417,7 @@ public:
         sortByRank<Galaxy2P>(halos);
         density = 0.0;
         for (Halo<Galaxy2P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; 
             h.galaxy.setProperty(1, AbundanceMatchingRegistry::get().getMatcher(GAL_COLOR_GMR_DENSITY).match(density));
         }
 
@@ -407,7 +429,7 @@ public:
         sortByRank<Galaxy2P>(halos);
         density = 0.0;
         for (Halo<Galaxy2P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; 
             h.galaxy.setProperty(0, AbundanceMatchingRegistry::get().getMatcher(GAL_MAGR_DENSITY).match(density));
         }
 
@@ -588,7 +610,7 @@ public:
 
         double density = 0.0;
         for (size_t i = 0; i < halos.size(); ++i) {
-            density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; // cumulative density of halos above this mass
             halos[i].galaxy.setLatentProperty(0, AbundanceMatchingRegistry::get().getMatcher(GAL_2P_ICA1_DENSITY).match(density));
         }
 
@@ -600,7 +622,7 @@ public:
 
         density = 0.0;
         for (size_t i = 0; i < halos.size(); ++i) {
-            density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; // cumulative density of halos above this mass
             halos[i].galaxy.setLatentProperty(1, AbundanceMatchingRegistry::get().getMatcher(GAL_2P_ICA2_DENSITY).match(density));
         }
 
@@ -623,7 +645,7 @@ public:
         sortByRank<Galaxy2P>(halos);
         density = 0.0;
         for (Halo<Galaxy2P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; 
             h.galaxy.setProperty(1, AbundanceMatchingRegistry::get().getMatcher(GAL_COLOR_GMR_DENSITY).match(density));
         }
 
@@ -635,7 +657,7 @@ public:
         sortByRank<Galaxy2P>(halos);
         density = 0.0;
         for (Halo<Galaxy2P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
+            density += HALO_PHYSICAL_DENSITY_INCREMENT; 
             h.galaxy.setProperty(0, AbundanceMatchingRegistry::get().getMatcher(GAL_MAGR_DENSITY).match(density));
         }
 
@@ -784,11 +806,19 @@ public:
         loaded = true;
     }
 
+    /** 
+    Halo Loadings    IC1    IC2    IC3    IC4
+    LOGMHALO        0.999 -0.137  0.266 -0.008
+    c               0.107 -1.210 -0.179  0.102
+    Spin           -0.026 -0.115  0.530  0.954
+    Halfmass_Scale  0.111 -0.422 -1.183  0.168
+    */
+
     double parameters[7][4] = {
-        {0.0, 0.5, -0.5, 0.0}, // red and old, diffuse
-        {1.0, 0.0, 0.0, 0.0},   // bright, massive
+        {0.5, -0.2, 0.5, 0.0}, // red and old, diffuse
+        {1.0, -0.1, 0.2, 0.0},   // bright, massive
         {-1.0, 0.0, 0.0, 0.0},   // dim and large
-        {-1.0, 0.0, 0.0, 0.0},   // compact, massive, dim
+        {0.0, 0.5, 0.5, 0.0},   // compact, massive, dim
         {0.0, 0.0, -1.0, 0.0},   // diffuse, young, starforming
         {0.0, 0.0, -1.0, 0.0}, // old with halpha 
         {0.0, 0.0, 0.0, 1.0} // low mass edge on dusty star-forming
@@ -815,7 +845,11 @@ public:
         // The sorts take ~250ms each on howdy
         // Not much to improve here. Replacing mock writing with direct call to corrfunc from code is most important.
 
-        // SET GALAXY PCs
+        // TODO think about if HALO_PHYSICAL_DENSITY_INCREMENT is still right for the downsampled model...
+        double density_increment = NORMALIZE_DENSITY_FUNCTIONS ? 1.0 / halos.size() : HALO_PHYSICAL_DENSITY_INCREMENT;
+
+
+        // For each halo, set its galaxy's principle components
         for (size_t propNum = 0; propNum < 7; ++propNum) {
 
             //#pragma omp parallel for
@@ -824,11 +858,12 @@ public:
             }
             sortByRank<Galaxy7P>(halos);
 
-            // TODO think about if HALO_DENSITY_INCREMENT is still right for the downsampled model...
             double density = 0.0;
             auto matcher =  AbundanceMatchingRegistry::get().getMatcher(galDensityFilename("7p", propNum));
+            if (NORMALIZE_DENSITY_FUNCTIONS)
+                matcher.normalize();
             for (size_t i = 0; i < halos.size(); ++i) {
-                density += HALO_DENSITY_INCREMENT; // cumulative density of halos above this mass
+                density += density_increment; // cumulative density of halos above this mass
                 halos[i].galaxy.setLatentProperty(propNum, matcher.match(density));
             }
         }
@@ -845,14 +880,32 @@ public:
         // which can result in unrealistic property values.
         // **************************************************************************************************
 
+        auto gmrMatcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_COLOR_GMR_DENSITY);
+        auto magrMatcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_MAGR_DENSITY);
+        auto c9050Matcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_C9050_DENSITY);
+        auto dn4000Matcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_DN4000_DENSITY);
+        auto halflightMatcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_HALFLIGHT_DENSITY);
+        auto loghalphaMatcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_LOGHALPHA_DENSITY);
+        auto logmstarMatcher = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_LOGMSTAR_DENSITY);
+
+        if (NORMALIZE_DENSITY_FUNCTIONS) {
+            gmrMatcher.normalize();
+            magrMatcher.normalize();
+            c9050Matcher.normalize();
+            dn4000Matcher.normalize();
+            halflightMatcher.normalize();
+            loghalphaMatcher.normalize();
+            logmstarMatcher.normalize();
+        }
+
         for (size_t i = 0; i < halos.size(); ++i) {
             halos[i].rank = halos[i].galaxy.color_g_r;
         }
         sortByRank(halos);
         double density = 0.0;
         for (Halo<Galaxy7P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.color_g_r = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_COLOR_GMR_DENSITY).match(density);
+            density += density_increment; 
+            h.galaxy.color_g_r = gmrMatcher.match(density);
         }
 
         for (size_t i = 0; i < halos.size(); ++i) {
@@ -862,8 +915,8 @@ public:
         sortByRank(halos);
         density = 0.0;
         for (Halo<Galaxy7P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.setProperty(0, AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_MAGR_DENSITY).match(density));
+            density += density_increment; 
+            h.galaxy.setProperty(0, magrMatcher.match(density));
         }
 
         for (size_t i = 0; i < halos.size(); ++i) {
@@ -872,8 +925,8 @@ public:
         sortByRank(halos);
         density = 0.0;
         for (Halo<Galaxy7P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.c9050 = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_C9050_DENSITY).match(density);
+            density += density_increment; 
+            h.galaxy.c9050 = c9050Matcher.match(density);
         }
 
         for (size_t i = 0; i < halos.size(); ++i) {
@@ -882,8 +935,8 @@ public:
         sortByRank(halos);
         density = 0.0;
         for (Halo<Galaxy7P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.dn4000 = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_DN4000_DENSITY).match(density);
+            density += density_increment; 
+            h.galaxy.dn4000 = dn4000Matcher.match(density);
         }
 
         for (size_t i = 0; i < halos.size(); ++i) {
@@ -892,8 +945,8 @@ public:
         sortByRank(halos);
         density = 0.0;
         for (Halo<Galaxy7P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.halflight_radius = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_HALFLIGHT_DENSITY).match(density);
+            density += density_increment; 
+            h.galaxy.halflight_radius = halflightMatcher.match(density);
         } // TODO why is this negative
 
         for (size_t i = 0; i < halos.size(); ++i) {
@@ -902,8 +955,8 @@ public:
         sortByRank(halos);
         density = 0.0;
         for (Halo<Galaxy7P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.loghalpha = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_LOGHALPHA_DENSITY).match(density);
+            density += density_increment; 
+            h.galaxy.loghalpha = loghalphaMatcher.match(density);
         } // TODO why is this negative
 
         for (size_t i = 0; i < halos.size(); ++i) {
@@ -912,11 +965,16 @@ public:
         sortByRank(halos);
         density = 0.0;
         for (Halo<Galaxy7P> &h : halos) {
-            density += HALO_DENSITY_INCREMENT; 
-            h.galaxy.logmstar = AbundanceMatchingRegistry::get().getMatcher(GAL_MAGBIN4_LOGMSTAR_DENSITY).match(density);
+            density += density_increment; 
+            h.galaxy.logmstar = logmstarMatcher.match(density);
         }
         
-        for (size_t i = 0; i < 5 && i < halos.size(); ++i) {
+        // Debug printout. Sort by halo mass
+        for (size_t i = 0; i < halos.size(); ++i) {
+            halos[i].rank = halos[i].logmhalo;
+        }
+        sortByRank(halos);
+        for (size_t i = 0; i < 10 && i < halos.size(); ++i) {
             const Halo<Galaxy7P>& h = halos[i];
             LOG_INFO("Halo %d: logmhalo=%.3f, a1/2=%.3f, color=%.3f, abs_mag_r=%.3f, c9050=%.3f, dn4000=%.3f, halflight_radius=%.3f, loghalpha=%.3f, logmstar=%.3f\n", i, 
                 h.logmhalo, h.halfmass_scale, h.galaxy.color_g_r, h.galaxy.abs_mag_r,
@@ -962,13 +1020,29 @@ private:
         for (const Halo<Galaxy7P> &h : halos) {
             if (h.galaxy.abs_mag_r < info.magbin_brighter || h.galaxy.abs_mag_r > info.magbin_fainter)
                 continue;
-            // TODO need updated galaxy model for the other properties
+
+            if (info.quiescent != h.galaxy.isQuiescent())
+                continue;
+
+            // If it has a third property, check that it is within the range for this bin
+            if (!info.third_property_name.empty()) {
+                double prop_value = h.galaxy.getPropertyByName(info.third_property_name);
+                if (prop_value < info.third_property_lower || prop_value > info.third_property_upper)
+                    continue;
+            }
 
             ++count;
             outputFile << std::setprecision(8) << h.x << " " << h.y << " " << h.z << "\n";
         }
 
-        LOG_VERBOSE("Mock building: wrote %d galaxies for bias bin %zu\n", count, bin);
+        // TODO check if the mag mean of the sample we just wrote is close to the measured mean for this bin, and log a warning if not.
+        // think about this more
+
+        // TODO check the third property mean likewise
+
+
+
+        LOG_VERBOSE("Mock building: wrote %d galaxies for sample %zu: mag=[%.3f, %.3f], Q=%d, prop=%s [%.3f, %.3f]\n", count, bin, info.magbin_brighter, info.magbin_fainter, info.quiescent, info.third_property_name.c_str(), info.third_property_lower, info.third_property_upper);
         return count > 0;
     }
 };

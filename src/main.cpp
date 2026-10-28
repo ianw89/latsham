@@ -257,9 +257,9 @@ int run_pipeline(const std::vector<double>& model_params) {
     timer.endAndLog("Time to read halo catalog");
 
     // Remove halos below a mass threshold for now
-    double logmhalo_cut = 11.0;
-    halos.erase(std::remove_if(halos.begin(), halos.end(),
-        [logmhalo_cut](const Halo<T>& h) { return h.logmhalo < logmhalo_cut; }), halos.end());
+    //double logmhalo_cut = 11.0;
+    //halos.erase(std::remove_if(halos.begin(), halos.end(),
+    //    [logmhalo_cut](const Halo<T>& h) { return h.logmhalo < logmhalo_cut; }), halos.end());
 
     //ConnectionModel_1 model;
     //model.scatter = 0.83; 
@@ -268,10 +268,7 @@ int run_pipeline(const std::vector<double>& model_params) {
         model->setParamsFromList(model_params);
     model->load();
 
-
-
     // Apply halo model to get latent parameters for each halo
-    int k = 0;
     for (Halo<T> &h : halos) {
         model->haloModel->forward_transform(h);
     }

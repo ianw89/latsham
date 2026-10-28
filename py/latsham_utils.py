@@ -7,16 +7,29 @@ import time
 from caldata import CalData
 
 def spherical_to_linear_parameters(hyperparams):
-    if len(hyperparams) == 6:
-        theta1a, theta1b, theta1c, theta2a, theta2b, theta2c = hyperparams
-        return[cos(theta1a), sin(theta1a)*cos(theta1b), sin(theta1a)*sin(theta1b)*cos(theta1c), sin(theta1a)*sin(theta1b)*sin(theta1c),
-                    cos(theta2a), sin(theta2a)*cos(theta2b), sin(theta2a)*sin(theta2b)*cos(theta2c), sin(theta2a)*sin(theta2b)*sin(theta2c)]
     if len(hyperparams) == 2:
         theta1, theta2 = hyperparams
         return [cos(theta1), sin(theta1), cos(theta2), sin(theta2)]
-    else:        
-        raise ValueError("Hyperparams must be either 2 or 6 elements long.")
-    
+
+    else:
+        assert len(hyperparams) % 3 == 0, "Hyperparams must be a multiple of 3 elements long."
+        to_process = np.array(hyperparams).copy()
+        to_return = []
+
+        while len(to_process) > 0:
+            # Get front three parameters
+            theta, phi, psi = to_process[:3]
+            to_process = to_process[3:]
+
+            x = cos(theta)
+            y = sin(theta) * cos(phi)
+            z = sin(theta) * sin(phi) * cos(psi)
+            w = sin(theta) * sin(phi) * sin(psi)
+
+            to_return.extend([x, y, z, w])
+
+        return to_return
+
 
 def project_to_hypersphere(vec, radius=1.0):
     norm = sqrt(sum(v*v for v in vec))
@@ -26,35 +39,8 @@ def project_to_hypersphere(vec, radius=1.0):
 
 
 def linear_to_spherical_parameters(linear_params):
-    if len(linear_params) == 8:
-        x1, y1, z1, w1, x2, y2, z2, w2 = linear_params
-
-        vec1 = project_to_hypersphere([x1, y1, z1, w1])
-        vec2 = project_to_hypersphere([x2, y2, z2, w2])
-
-        x1, y1, z1, w1 = vec1
-        x2, y2, z2, w2 = vec2
-
-        theta1a = np.arccos(x1)
-        theta1b = np.arctan2(np.sqrt(z1*z1 + w1*w1), y1)
-        theta1c = np.arctan2(w1, z1)
-
-        theta2a = np.arccos(x2)
-        theta2b = np.arctan2(np.sqrt(z2*z2 + w2*w2), y2)
-        theta2c = np.arctan2(w2, z2)
-
-        # Make them all positive and in the range [0, 2*pi) (some are really in [0, pi] and some are in [0, 2*pi])
-        theta1a = theta1a % (2 * np.pi)
-        theta1b = theta1b % (2 * np.pi)
-        theta1c = theta1c % (2 * np.pi)
-        theta2a = theta2a % (2 * np.pi)
-        theta2b = theta2b % (2 * np.pi)
-        theta2c = theta2c % (2 * np.pi)
-
-        return [
-            theta1a, theta1b, theta1c,
-            theta2a, theta2b, theta2c
-        ]
+    
+    # This is the old 2 halo prop -> 2 galaxy prop model
     if len(linear_params) == 4:
         x1, y1, x2, y2 = linear_params
 
@@ -69,12 +55,34 @@ def linear_to_spherical_parameters(linear_params):
         theta2 = np.arccos(x2)
 
         return [theta1, theta2]
-    else:
-        raise ValueError("Linear params must be either 4 or 8 elements long.")
+
+    # Otherwise, 4 halos props to some number of galaxy props.
+    assert len(linear_params) % 4 == 0, "Linear params must be a multiple of 4 elements long."
+    to_process = np.array(linear_params).copy()
+    to_return = []
+
+    while len(to_process) > 0:
+        # Get front four parameters
+        x, y, z, w = to_process[:4]
+        to_process = to_process[4:]
+
+        x, y, z, w = project_to_hypersphere([x, y, z, w])
+
+        theta = np.arccos(x)
+        phi = np.arctan2(np.sqrt(z*z + w*w), y)
+        psi = np.arctan2(w, z)
+
+        # Make them all positive and in the range [0, 2*pi) (some are really in [0, pi] and some are in [0, 2*pi])
+        theta = theta % (2 * np.pi)
+        phi = phi % (2 * np.pi)
+        psi = psi % (2 * np.pi)
+
+        to_return.extend([theta, phi, psi])
+
+    return to_return
     
-
+# tests
 assert spherical_to_linear_parameters(linear_to_spherical_parameters([1, 0, 0, 0, 1, 0, 0, 0])) == [1, 0, 0, 0, 1, 0, 0, 0]
-
 
 angles = np.random.rand(6)
 angles[0] *= np.pi
@@ -83,11 +91,9 @@ angles[2] *= 2*np.pi
 angles[3] *= np.pi
 angles[4] *= np.pi
 angles[5] *= 2*np.pi
-
 lin = spherical_to_linear_parameters(angles)
 angles2 = linear_to_spherical_parameters(lin)
 lin2 = spherical_to_linear_parameters(angles2)
-
 assert(np.max(np.abs(np.array(lin) - np.array(lin2))) < 1e-10)
 
 

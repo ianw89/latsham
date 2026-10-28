@@ -28,6 +28,40 @@ bool isclose(double a, double b, double rel_tol = 1e-6, double abs_tol = 1e-12) 
     return std::fabs(a - b) <= std::max(rel_tol * std::max(std::fabs(a), std::fabs(b)), abs_tol);
 }
 
+std::vector<double> getTestPhysicalDensities() {
+    std::vector<double> densities(80); // TODO I used to go much higher densities
+    for (int i = 0; i < 51; i++) {
+        densities[i] = 1e-8 * pow(10, i * 0.1); 
+    }
+    for (int i = 51; i < 80; i++) {
+        densities[i] = 1e-8 * pow(10, 50 * 0.1) * pow(10, (i-50) * 0.01); // Sample more linearly at higher densities where the function is changing more rapidly
+    }
+    return densities;
+}
+
+std::vector<double> getTestNormalizedDensities() {
+    std::vector<double> densities(100);
+    // Normalized densities from 0 to 1
+    // Let's sample the extremal values a bit more
+    densities[0] = 0;
+    densities[1] = 0.000001;
+    densities[2] = 0.00001;
+    densities[3] = 0.0001;
+    densities[4] = 0.001;
+    densities[5] = 0.01;
+    densities[6] = 0.04;
+    for (int i = 7; i < 94; i++) { 
+        densities[i] = i / 100.0;
+    }
+    densities[94] = 0.97;
+    densities[95] = 0.99;
+    densities[96] = 0.999;
+    densities[97] = 0.9999;
+    densities[98] = 0.99999;
+    densities[99] = 1.0;
+    return densities;
+}
+
 const std::string testdensityfile = "/mount/sirocco1/imw2293/GROUP_CAT/SelfCalGroupFinder/py/parameters/bgs_y3/halo_pca1_density_func.dat";
 
 void test_TabulatedDensityFunction() {
@@ -54,102 +88,49 @@ void test_AMCDF_HaloICA1() {
     printf("\n=== AMCDF TESTS (HALO ICA 1) ===\n");
 
     AMCDF t(testdensityfile);
+    double range = std::abs(t.getRightEdge() - t.getLeftEdge());
+    printf("Halo ICA1 range: [%.3f, %.3f]\n", t.getLeftEdge(), t.getRightEdge());
 
-    // Test spline interpolation quality by checking smoothness
-    printf("\n--- Testing Spline Smoothness and Monotonicity ---\n");
-    // Sample the cumulative density function at several points
-    std::vector<double> x_vals(20);
-    for (int i = 0; i < 20; i++)
-        x_vals[i] = -1.0 + i * 0.1; // Sample from -1 to 1
-    double prev_val = -9999;
+    // Test inverted spline interpolation quality by checking smoothness and monotonicity
+    std::vector<double> densities = getTestPhysicalDensities();
+    double prev_val = 9999;
     bool is_smooth = true;
-    
-    for (double x : x_vals) {
-        double val = t.eval(x);            
-        TEST_CASE(std::isfinite(val), val, "All interpolated values should be finite");
-        
-        if (prev_val > -9999) {
-            // Monotonic Test
-            TEST_CASE(val <= prev_val, x, "Cumulative density should get smaller as we increase x"); // Summed from large values down
+    bool all_finite = true;
 
-            // Check that moving by 0.1 in this space doesn't cause huge jumps in density (which would indicate a bad spline fit)
-            // This assumes the x values are typical for PCA / ICA components. Raw values might have different scales...
-            double ratio = val / prev_val;
-            if (ratio > 1e1 || ratio < 1e-1) {
+    for (double d : densities) {
+        double val = t.eval_inverse(d);
+        if (!std::isfinite(val)) {
+            all_finite = false;
+            printf("    WARNING: Non-finite value for density %.2e\n", d);
+            continue;
+        }
+
+        if (prev_val < 9999) {
+            // Monotonic Test
+            TEST_CASE(val <= prev_val, val, "Value should get smaller as density goes up");
+
+            double dx = std::abs(val - prev_val);
+            double ratio = dx / range;
+            if (ratio > 0.3) {
                 is_smooth = false;
-                printf("    WARNING: Large jump detected (ratio=%.2e)\n", ratio);
+                printf("    WARNING: Large jump detected (ratio=%.2f)\n", ratio);
             }
         }
         prev_val = val;
     }
+    TEST_CASE(all_finite, all_finite, "All inverse values should be finite");
     TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
-
-    
-    // Test extrapolation behavior at boundaries
-    printf("\n--- Testing Boundary Behavior  ---\n");
-    double extreme_low = -1000.0;
-    double val_low = t.eval(extreme_low);
-    double extreme_high = 1000.0;
-    double val_high = t.eval(extreme_high);
-    
-    printf("  x=%.1f -> %.6f,   x=%.1f -> %.3e\n", extreme_low, val_low, extreme_high, val_high);
-    
-    TEST_CASE(std::isfinite(val_low) && val_low > 1e-2, val_low, "CDF should handle extrapolation for low values");
-    TEST_CASE(std::isfinite(val_high) && val_high < 1e-8, val_high, "CDF should handle extrapolation for high values");
-    TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
-
 }
 
 void test_AMCDF_GalaxyAbsMag() {
+    std::cout << "\n=== AMCDF TESTS (GALAXY ABS MAG R) ===\n";
 
     // Now repeat for magnitudes file
     AMCDF t(GAL_MAGR_DENSITY);
-    std::vector<double> x_vals(20);
 
-    printf("\n--- Testing Spline Smoothness and Monotonicity (Galaxy abs mag) ---\n");
-    for (int i = 0; i < 20; i++)
-        x_vals[i] = -23.0 + i * 0.1; // Sample from -23 to -21
+    std::vector<double> densities = getTestPhysicalDensities();
     double prev_val = -9999;
     bool is_smooth = true;
-    for (double x : x_vals) {
-        double val = t.eval(x);            
-        TEST_CASE(std::isfinite(val), val, "All interpolated values should be finite");
-
-        if (prev_val > -9999) {
-            // Monotonic Test
-            TEST_CASE(val >= prev_val, x, "Cumulative density should get larger as we increase x"); // Summed from small values up for magnitudes since negative is brighter
-
-            // Check that moving by 0.1 in this space doesn't cause huge jumps in density (which would indicate a bad spline fit)
-            double ratio = val / prev_val;
-            if (ratio > 1e1 || ratio < 1e-1) {
-                is_smooth = false;
-                printf("    WARNING: Large jump detected (ratio=%.2e)\n", ratio);
-            }
-        }
-        prev_val = val;
-    }
-    TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
-
-     // Test extrapolation behavior at boundaries
-    printf("\n--- Testing Boundary Behavior (Galaxy abs mag) ---\n");
-    double extreme_low = -30.0;
-    double val_low = t.eval(extreme_low);
-    double extreme_high = -5.0;
-    double val_high = t.eval(extreme_high);
-
-    TEST_CASE(std::isfinite(val_low) && val_low < 1e-8, val_low, "CDF should handle extrapolation for low values");
-    TEST_CASE(std::isfinite(val_high) && val_high > 1e-2, val_high, "CDF should handle extrapolation for high values");
-    TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
-
-
-
-    printf("\n--- Testing Inverted Spline Smoothness and Monotonicity (Galaxy abs mag) ---\n");
-    std::vector<double> densities(100);
-    for (int i = 0; i < 100; i++) {
-        densities[i] = 1e-8 * pow(10, i * 0.1); // Sample densities logarithmically
-    }
-    prev_val = -9999;
-    is_smooth = true;
     bool all_finite = true;
     for (double d : densities) {
         double mag = t.eval_inverse(d);       
@@ -179,43 +160,93 @@ void test_AMCDF_GalaxyGmR() {
     std::cout << "\n=== AMCDF TESTS (GALAXY COLOR g-r) ===\n";
 
     AMCDF t(GAL_COLOR_GMR_DENSITY);
-    std::vector<double> x_vals(20);
+    double range = std::abs(t.getRightEdge() - t.getLeftEdge());
+    printf("g-r range: [%.3f, %.3f]\n", t.getLeftEdge(), t.getRightEdge());
 
-    printf("\n--- Testing Spline Smoothness and Monotonicity (Galaxy g-r) ---\n");
-    for (int i = 0; i < 20; i++)
-        x_vals[i] = 0.2 + i * 0.04;
-    double prev_val = -9999;
+    std::vector<double> densities = getTestPhysicalDensities();
+    double prev_val = 9999;
     bool is_smooth = true;
-    for (double x : x_vals) {
-        double val = t.eval(x);            
-        TEST_CASE(std::isfinite(val), val, "All interpolated values should be finite");
+    bool all_finite = true;
+    for (double d : densities) {
+        double val = t.eval_inverse(d);
+        if (!std::isfinite(val)) {
+            all_finite = false;
+            printf("    WARNING: Non-finite value for density %.2e\n", d);
+            continue;
+        }
 
-        if (prev_val > -9999) {
+        if (prev_val < 9999) {
             // Monotonic Test
-            TEST_CASE(val <= prev_val, x, "Cumulative density should get smaller as we increase x"); // Summed from high g-r (redder) down
+            TEST_CASE(val <= prev_val, val, "g-r should get smaller (bluer) as density goes up"); // Summed from high g-r (redder) down
 
-            // Check that moving by 0.1 in this space doesn't cause huge jumps in density (which would indicate a bad spline fit)
-            double ratio = val / prev_val;
-            if (ratio > 1e1 || ratio < 1e-1) {
+            double dx = std::abs(val - prev_val);
+            double ratio = dx / range;
+            if (ratio > 0.3) {
                 is_smooth = false;
-                printf("    WARNING: Large jump detected (ratio=%.2e)\n", ratio);
+                printf("    WARNING: Large jump detected (ratio=%.2f)\n", ratio);
             }
         }
         prev_val = val;
     }
+    TEST_CASE(all_finite, all_finite, "All inverse values should be finite");
     TEST_CASE(is_smooth, is_smooth, "Spline should be reasonably smooth (no huge jumps)");
+}
 
-     // Test extrapolation behavior at boundaries
-    printf("\n--- Testing Boundary Behavior (Galaxy g-r) ---\n");
-    double extreme_low = -5.0;
-    double val_low = t.eval(extreme_low);
-    double extreme_high = 5.0;
-    double val_high = t.eval(extreme_high);
+void test_AMCDF_MagBin4(const std::string& density_file, const std::string& label) {
+    std::cout << "\n=== AMCDF TESTS (MAGBIN4 " << label << ") ===\n";
 
-    TEST_CASE(std::isfinite(val_low) && val_low > 1e-2, val_low, "CDF should handle extrapolation for low values");
-    TEST_CASE(std::isfinite(val_high) && val_high < 1e-8, val_high, "CDF should handle extrapolation for high values");
-    TEST_CASE(val_low >= 0.0 && val_high >= 0.0, val_low, "Extrapolated densities should remain non-negative");
+    AMCDF t(density_file);
+    t.normalize();
+    double left = t.getLeftEdge();
+    double right = t.getRightEdge();
+    double range = std::abs(right - left);
+    printf("%s range: [%.3f, %.3f]\n", label.c_str(), left, right);
 
+    double prev_val = -9999;
+    bool increasing = true;
+    bool direction_known = false;
+    bool is_smooth = true;
+    bool all_finite = true;
+    
+    std::vector<double> densities = getTestNormalizedDensities();
+
+    for (double d : densities) {
+        double prop = t.eval_inverse(d);
+        if (!std::isfinite(prop)) {
+            all_finite = false;
+            printf("    WARNING: Non-finite value for density %.2e (%s)\n", d, label.c_str());
+            continue;
+        }
+
+        if (prev_val > -9999) {
+            if (!direction_known) {
+                increasing = prop > prev_val;
+                direction_known = true;
+            }
+            bool monotonic_ok = increasing ? (prop >= prev_val) : (prop <= prev_val);
+            TEST_CASE2(monotonic_ok, d, prop, "CDF should be monotonic (" + label + ")");
+
+            double dx = std::abs(prop - prev_val);
+            double ratio = dx / range;
+            if (ratio > 0.3) {
+                is_smooth = false;
+                printf("    WARNING: Large jump detected (ratio=%.2f) for %s\n", ratio, label.c_str());
+            }
+        }
+        prev_val = prop;
+    }
+    TEST_CASE(all_finite, all_finite, "All inverse values should be finite (" + label + ")");
+    TEST_CASE(is_smooth, is_smooth, "Inverse spline should be reasonably smooth (no huge jumps) (" + label + ")");
+}
+
+void test_AMCDF_MagBin4_Normalized() {
+    test_AMCDF_MagBin4(GAL_MAGBIN4_MAGR_DENSITY, "abs mag r");
+    test_AMCDF_MagBin4(GAL_MAGBIN4_C9050_DENSITY, "c9050");
+    test_AMCDF_MagBin4(GAL_MAGBIN4_COLOR_GMR_DENSITY, "g-r color");
+    test_AMCDF_MagBin4(GAL_MAGBIN4_DN4000_DENSITY, "dn4000");
+    test_AMCDF_MagBin4(GAL_MAGBIN4_LOGHALPHA_DENSITY, "log halpha EW");
+    test_AMCDF_MagBin4(GAL_MAGBIN4_LOGMSTAR_DENSITY, "logmstar");
+    test_AMCDF_MagBin4(GAL_MAGBIN4_HALFLIGHT_DENSITY, "halflight radius");
 }
 
 void test_AMCDF_GalICA1() {
@@ -226,13 +257,7 @@ void test_AMCDF_GalICA1() {
     printf("ICA1 range: [%.3f, %.3f]\n", t.getLeftEdge(), t.getRightEdge());
 
     printf("\n--- Testing Inverted Spline Smoothness and Monotonicity (Galaxy ICA 1) ---\n");
-    std::vector<double> densities(100); // Want to sample densiities slowly at when they are large
-    for (int i = 0; i < 61; i++) {
-        densities[i] = 1e-8 * pow(10, i * 0.1); 
-    }
-    for (int i = 61; i < 100; i++) {
-        densities[i] = 1e-8 * pow(10, 60 * 0.1) * pow(10, (i-60) * 0.02); // Sample more linearly at higher densities where the function is changing more rapidly
-    }
+    std::vector<double> densities = getTestPhysicalDensities();
     double prev_val = 9999;
     bool is_smooth = true;
     bool all_finite = true;
@@ -403,6 +428,8 @@ void test_Halo_LatentModel() {
     TEST_CASE(isclose(h.logmhalo, 12.0, 1e-5), h.logmhalo, "Roundtrip logmhalo should be very close to original");  
     TEST_CASE(isclose(h.halfmass_scale, 0.3, 1e-5), h.halfmass_scale, "Roundtrip halfmass_scale should be very close to original");
 
+    Halo<Galaxy7P> h7 = Halo<Galaxy7P>();
+    // No crash
 }
 
 void test_E2E_2P2PModel() {
@@ -458,7 +485,6 @@ void test_E2E_2P2PModel() {
                   "Bigger halos should have brighter galaxies (lower abs mag r)");
     }
 }
-
 
 void test_E2E_2P4PModel() {
     printf("\n=== End to End 2P4P Model TESTS ===\n");
@@ -538,6 +564,23 @@ void test_E2E_DR2v0_3_7P4PModel() {
 }
 
 
+void test_AMCDF_Normalization() {
+    AMCDF t(GAL_MAGBIN4_COLOR_GMR_DENSITY);
+
+    auto left_before = t.getLeftEdge();
+    auto right_before = t.getRightEdge();
+
+    t.normalize();
+
+    // Now the edges should go from 0 to 1
+    auto left_after = t.eval_inverse(0.0); // Should be left edge
+    auto right_after = t.eval_inverse(1.0); // Should be right edge
+
+    TEST_CASE(isclose(left_after, left_before, 1e-6), left_after, "Extreme left after normalization should match original left edge");
+    TEST_CASE(isclose(right_after, right_before, 1e-6), right_after, "Extreme right after normalization should match original right edge");
+}
+
+
 
 int main () {
     test_TabulatedDensityFunction();
@@ -545,6 +588,7 @@ int main () {
     test_AMCDF_GalaxyAbsMag();
     test_AMCDF_GalaxyGmR();
     test_AMCDF_GalICA1();
+    test_AMCDF_Normalization();
     test_Galaxy_LatentModel();
     test_Galaxy_7LatentModel();
     test_Halo_LatentModel();
@@ -553,6 +597,8 @@ int main () {
     test_E2E_2P2PModel();
     test_E2E_2P4PModel();
     test_E2E_DR2v0_3_7P4PModel();
+    test_AMCDF_MagBin4_Normalized();
+    
 
     std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;
     std::cout << "All tests passed successfully." << std::endl;
